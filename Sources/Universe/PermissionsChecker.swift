@@ -246,10 +246,38 @@ final class PermissionsChecker: ObservableObject {
             // Prompts once, then falls through to the pane on later attempts.
             _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
             openSettings(for: kind)
+            // AXIsProcessTrusted() caches within a process; poll until the user
+            // grants and the value flips, or 15s elapses.
+            Task {
+                for _ in 0..<15 {
+                    try? await Task.sleep(for: .seconds(1))
+                    if AXIsProcessTrusted() {
+                        await refresh()
+                        return
+                    }
+                }
+                await refresh()
+            }
         case .screenRecording:
             CGRequestScreenCaptureAccess()
             openSettings(for: kind)
-        case .fullDisk, .appManagement, .browser:
+        case .fullDisk:
+            // Trigger the TCC prompt by reading a protected path. Without this
+            // the app never appears in the Full Disk Access list.
+            _ = try? FileManager.default.contentsOfDirectory(atPath: NSHomeDirectory() + "/Library/Mail")
+            openSettings(for: kind)
+            // Poll until the probe succeeds or 15s elapses.
+            Task {
+                for _ in 0..<15 {
+                    try? await Task.sleep(for: .seconds(1))
+                    if Self.hasFullDiskAccess {
+                        await refresh()
+                        return
+                    }
+                }
+                await refresh()
+            }
+        case .appManagement, .browser:
             openSettings(for: kind)
         }
     }
