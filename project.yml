@@ -1,0 +1,23 @@
+name: TamaClone
+options:
+  bundleIdPrefix: com.tamaclone
+  deploymentTarget:
+    macOS: "15.0"
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: com.tamaclone.app
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    GENERATE_INFOPLIST_FILE: NO
+    INFOPLIST_FILE: Info.plist
+    SWIFT_VERSION: "5.0"
+targets:
+  TamaClone:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/TamaClone
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tamaclone.app
