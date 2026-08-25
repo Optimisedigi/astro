@@ -190,7 +190,8 @@ final class SpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         utterance.rate = Self.rate(for: speed)
         synthesizer.speak(utterance)
         isSpeaking = true
-        MenuBarMood.shared.setActivity(.speaking)
+        MenuBarMood.shared.setActivity(.speaking) // menubar mouth toggles open/smile
+        MascotController.shared.setState(.responding) // avatar talks along
     }
 
     /// Speaks one line in a given voice, for the preview button in Voice Settings.
@@ -218,12 +219,18 @@ final class SpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
         isSpeaking = false
         if MenuBarMood.shared.mood == .speaking { MenuBarMood.shared.setActivity(nil) }
+        if MascotController.shared.currentState == .responding {
+            MascotController.shared.setState(.idle)
+        }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in
             self.isSpeaking = false
             if MenuBarMood.shared.mood == .speaking { MenuBarMood.shared.setActivity(nil) }
+            if MascotController.shared.currentState == .responding {
+                MascotController.shared.setState(.idle)
+            }
         }
     }
 }

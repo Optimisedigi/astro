@@ -36,9 +36,10 @@ final class PanelController {
         let width: CGFloat = 680
         let height: CGFloat = 560
         let screen = NSScreen.main?.visibleFrame ?? .init(x: 0, y: 0, width: 1440, height: 900)
+        // Tama centers the panel on screen: top edge at midY + height/2, growing down.
         let rect = NSRect(
             x: screen.midX - width / 2,
-            y: screen.maxY - height - 12,
+            y: screen.midY - height / 2,
             width: width,
             height: height
         )
@@ -56,6 +57,12 @@ final class PanelController {
 
     /// Bring the panel up (idempotent) — used on launch and on reopen.
     func show() {
+        // Re-center on the current screen every open (display setups change).
+        if let screen = NSScreen.main?.visibleFrame {
+            let size = panel.frame.size
+            panel.setFrameOrigin(NSPoint(x: screen.midX - size.width / 2,
+                                         y: screen.midY - size.height / 2))
+        }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         MascotController.shared.resume()

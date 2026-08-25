@@ -263,6 +263,15 @@ enum SelfTest {
         check(!moodState.mood.isActivity, "mood: clearing activity restores time of day")
         check(MenuBarMood.Mood.allCases.count == 10, "mood: all 10 Tama moods present")
 
+        // Speaking drives the talking animation on both mascots.
+        let speech = SpeechService()
+        speech.speak("selftest talking animation")
+        check(MenuBarMood.shared.mood == .speaking, "talking: menubar enters speaking (mouth animates)")
+        check(MascotController.shared.currentState == .responding, "talking: avatar enters responding cycle")
+        speech.stop()
+        check(MenuBarMood.shared.mood != .speaking, "talking: menubar leaves speaking on stop")
+        check(MascotController.shared.currentState == .idle, "talking: avatar returns to idle on stop")
+
         // Mascot state machine (CLI build exercises the dependency-free path).
         check(MascotState.allCases.count == 6, "mascot: all 6 Tama states present")
         let mascot = MascotController.shared
