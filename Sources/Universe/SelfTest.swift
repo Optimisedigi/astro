@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 import CryptoKit
 import Foundation
 
@@ -133,6 +134,9 @@ enum SelfTest {
         // 9. Clipboard history + panel tools
         await runPanelToolChecks(check: check)
 
+        // 10. Mood menubar icon
+        await runMoodIconChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
     }
@@ -186,6 +190,51 @@ enum SelfTest {
         // Restore original state
         for list in taskStore.taskLists { taskStore.delete(id: list.id) }
         for list in originalLists { taskStore.save(list) }
+    }
+
+    @MainActor
+    static func runMoodIconChecks(check: (Bool, String) -> Void) async {
+        // Every mood must draw a non-blank template image.
+        for mood in MenuBarMood.Mood.allCases {
+            let image = MenuBarIcon.create(mood: mood, animationFrame: false)
+            check(image.isTemplate, "mood icon: \(mood.rawValue) is a template image")
+            check(image.size == NSSize(width: 18, height: 18), "mood icon: \(mood.rawValue) is 18pt")
+            // Rasterise and confirm ink.
+            var hasInk = false
+            if let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+                outer: for y in 0..<rep.pixelsHigh where y % 2 == 0 {
+                    for x in 0..<rep.pixelsWide where x % 2 == 0 {
+                        if let c = rep.colorAt(x: x, y: y), c.alphaComponent > 0.1 { hasInk = true; break outer }
+                    }
+                }
+            }
+            check(hasInk, "mood icon: \(mood.rawValue) draws visible pixels")
+        }
+
+        // Animation frames differ for animated moods (antenna/mouth move).
+        func png(_ mood: MenuBarMood.Mood, _ frame: Bool) -> Data? {
+            let image = MenuBarIcon.create(mood: mood, animationFrame: frame)
+            return image.tiffRepresentation
+        }
+        check(png(.thinking, false) != png(.thinking, true), "mood icon: thinking animates between frames")
+        check(png(.speaking, false) != png(.speaking, true), "mood icon: speaking animates between frames")
+        check(png(.afternoon, false) == png(.afternoon, true), "mood icon: passive mood ignores animation frame")
+
+        // Activity moods override time-of-day; clearing restores it.
+        let moodState = MenuBarMood.shared
+        moodState.setActivity(.thinking)
+        check(moodState.mood == .thinking, "mood: activity overrides time of day")
+        moodState.setActivity(.error)
+        check(moodState.mood == .error, "mood: error overrides other activity")
+        moodState.setActivity(nil)
+        check(!moodState.mood.isActivity, "mood: clearing activity restores time of day")
+        check(MenuBarMood.Mood.allCases.count == 10, "mood: all 10 Tama moods present")
+
+        // Squircle icons used in list rows.
+        let session = MenuBarIcon.sessionIcon(mood: .afternoon)
+        let symbol = MenuBarIcon.symbolIcon(name: "checklist")
+        check(session.size == NSSize(width: 28, height: 28), "mood icon: session squircle is 28pt")
+        check(symbol.size == NSSize(width: 28, height: 28), "mood icon: symbol squircle is 28pt")
     }
 
     @MainActor

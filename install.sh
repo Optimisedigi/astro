@@ -45,5 +45,5 @@ cp -R "$APP" "$DEST"
 echo
 echo "Installed: $DEST"
 echo "Open it with:  open -a Universe"
-echo "Then sign in:  menubar icon (speech bubbles) -> Settings -> Sign in with Claude"
+echo "Then sign in:  menubar mascot icon -> Settings -> Sign in with Claude"
 echo "Global hotkey: Option-Space"

@@ -46,6 +46,7 @@ final class VoiceService: NSObject, ObservableObject {
     func startListening() throws {
         guard !isListening else { return }
         guard let recognizer, recognizer.isAvailable else { throw VoiceError.recognizerUnavailable }
+        MenuBarMood.shared.setActivity(.listening)
 
         transcript = ""
         hasSpoken = false
@@ -87,6 +88,7 @@ final class VoiceService: NSObject, ObservableObject {
 
     func stopListening() {
         isListening = false
+        if MenuBarMood.shared.mood == .listening { MenuBarMood.shared.setActivity(nil) }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         recognitionRequest?.endAudio()
@@ -188,6 +190,7 @@ final class SpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         utterance.rate = Self.rate(for: speed)
         synthesizer.speak(utterance)
         isSpeaking = true
+        MenuBarMood.shared.setActivity(.speaking)
     }
 
     /// Speaks one line in a given voice, for the preview button in Voice Settings.
@@ -214,9 +217,13 @@ final class SpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     func stop() {
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
         isSpeaking = false
+        if MenuBarMood.shared.mood == .speaking { MenuBarMood.shared.setActivity(nil) }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.isSpeaking = false }
+        Task { @MainActor in
+            self.isSpeaking = false
+            if MenuBarMood.shared.mood == .speaking { MenuBarMood.shared.setActivity(nil) }
+        }
     }
 }

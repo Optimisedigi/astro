@@ -97,6 +97,7 @@ final class ChatState: ObservableObject {
         toolRuns.removeAll()
         session.updatedAt = Date()
         isStreaming = true
+        MenuBarMood.shared.setActivity(.thinking)
 
         let apiMessages: [[String: Any]] = session.messages.dropLast().map {
             ["role": $0.role, "content": [["type": "text", "text": $0.text]]]
@@ -108,6 +109,8 @@ final class ChatState: ObservableObject {
                 isStreaming = false
                 session.updatedAt = Date()
                 store.save(session)
+                // Speaking keeps its own mood; otherwise back to time-of-day.
+                if !speech.isSpeaking { MenuBarMood.shared.setActivity(nil) }
             }
             do {
                 let loop = AgentLoop(workspace: workspace)
@@ -117,7 +120,12 @@ final class ChatState: ObservableObject {
                     guard let self, let last = self.session.messages.indices.last else { return }
                     self.session.messages[last].text = text
                 }
+                var firstToken = true
                 try await loop.run(apiMessages: apiMessages, streamProvider: ClaudeService.shared.streamEvents) { [weak self] delta in
+                    if firstToken {
+                        firstToken = false
+                        MenuBarMood.shared.setActivity(.responding)
+                    }
                     self?.queue.append(delta)
                 } onToolActivity: { [weak self] activity in
                     self?.apply(activity)
@@ -129,6 +137,12 @@ final class ChatState: ObservableObject {
                 }
             } catch {
                 errorMessage = error.localizedDescription
+                MenuBarMood.shared.setActivity(.error)
+                // Show the error face briefly, then return to time-of-day.
+                Task {
+                    try? await Task.sleep(for: .seconds(4))
+                    if MenuBarMood.shared.mood == .error { MenuBarMood.shared.setActivity(nil) }
+                }
                 if voiceMode { try? voice.startListening() }
             }
         }

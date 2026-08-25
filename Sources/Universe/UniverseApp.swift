@@ -5,7 +5,7 @@ struct UniverseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("Universe", systemImage: "bubble.left.and.bubble.right.fill") {
+        MenuBarExtra {
             Button("Open Chat (⌥Space)") {
                 PanelController.shared.toggle()
             }
@@ -21,7 +21,19 @@ struct UniverseApp: App {
             Button("Quit") {
                 NSApplication.shared.terminate(nil)
             }
+        } label: {
+            MenuBarIconView()
         }
+    }
+}
+
+/// The mascot menubar icon; re-renders as the mood or animation frame changes.
+struct MenuBarIconView: View {
+    @State private var mood = MenuBarMood.shared
+
+    var body: some View {
+        Image(nsImage: MenuBarIcon.create(mood: mood.mood, animationFrame: mood.animationFrame))
+            .accessibilityLabel("Universe: \(mood.mood.rawValue)")
     }
 }
 
