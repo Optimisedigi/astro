@@ -230,6 +230,16 @@ enum SelfTest {
         check(!moodState.mood.isActivity, "mood: clearing activity restores time of day")
         check(MenuBarMood.Mood.allCases.count == 10, "mood: all 10 Tama moods present")
 
+        // Mascot state machine (CLI build exercises the dependency-free path).
+        check(MascotState.allCases.count == 6, "mascot: all 6 Tama states present")
+        let mascot = MascotController.shared
+        mascot.setState(.waiting)
+        check(mascot.currentState == .waiting, "mascot: setState applies")
+        mascot.notifyKeystroke()
+        check(mascot.currentState == .typing, "mascot: keystroke enters typing")
+        mascot.setState(.idle)
+        check(mascot.currentState == .idle, "mascot: returns to idle")
+
         // Squircle icons used in list rows.
         let session = MenuBarIcon.sessionIcon(mood: .afternoon)
         let symbol = MenuBarIcon.symbolIcon(name: "checklist")

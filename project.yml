@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: com.universe
   deploymentTarget:
     macOS: "15.0"
+packages:
+  RiveRuntime:
+    url: https://github.com/rive-app/rive-ios
+    from: "6.20.3"
 settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.universe.app
@@ -22,6 +26,10 @@ targets:
         buildPhase: resources
       - path: Resources/notification.mp3
         buildPhase: resources
+      - path: Resources/avatar_pack.riv
+        buildPhase: resources
+    dependencies:
+      - package: RiveRuntime
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.universe.app

@@ -98,6 +98,7 @@ final class ChatState: ObservableObject {
         session.updatedAt = Date()
         isStreaming = true
         MenuBarMood.shared.setActivity(.thinking)
+        MascotController.shared.setState(.waiting)
 
         let apiMessages: [[String: Any]] = session.messages.dropLast().map {
             ["role": $0.role, "content": [["type": "text", "text": $0.text]]]
@@ -125,12 +126,21 @@ final class ChatState: ObservableObject {
                     if firstToken {
                         firstToken = false
                         MenuBarMood.shared.setActivity(.responding)
+                        MascotController.shared.setState(.responding)
                     }
                     self?.queue.append(delta)
                 } onToolActivity: { [weak self] activity in
                     self?.apply(activity)
                 }
                 queue.finish() // flush before anything reads the final text
+                // Brief happy beat, then settle back to idle (matches tama-agent).
+                MascotController.shared.setState(.happy)
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    if MascotController.shared.currentState == .happy {
+                        MascotController.shared.setState(.idle)
+                    }
+                }
                 if voiceMode {
                     speech.speak(session.messages[session.messages.count - 1].text)
                     resumeListeningAfterReply()
@@ -138,6 +148,7 @@ final class ChatState: ObservableObject {
             } catch {
                 errorMessage = error.localizedDescription
                 MenuBarMood.shared.setActivity(.error)
+                MascotController.shared.setState(.thinking)
                 // Show the error face briefly, then return to time-of-day.
                 Task {
                     try? await Task.sleep(for: .seconds(4))
@@ -258,6 +269,8 @@ struct ChatView: View {
 
     private var inputBar: some View {
         HStack(spacing: 8) {
+            MascotBadge()
+
             Button(action: { state.voiceMode ? state.disableVoiceMode() : state.enableVoiceMode() }) {
                 Image(systemName: state.voiceMode ? "mic.fill" : "mic")
                     .font(.title2)
@@ -271,6 +284,7 @@ struct ChatView: View {
                 .padding(8)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                 .onSubmit { showSchedules = false; state.send() }
+                .onChange(of: state.input) { _, _ in MascotController.shared.notifyKeystroke() }
             Button(action: { showSchedules = false; state.send() }) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)

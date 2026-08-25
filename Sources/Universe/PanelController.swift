@@ -55,11 +55,13 @@ final class PanelController {
     func show() {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        MascotController.shared.resume()
     }
 
     func toggle() {
         if panel.isVisible {
             panel.orderOut(nil)
+            MascotController.shared.pause()
         } else {
             show()
         }
