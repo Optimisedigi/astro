@@ -31,6 +31,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-states") {
+            guard i + 1 < CommandLine.arguments.count else {
+                print("usage: Universe --render-states <dir>")
+                exit(2)
+            }
+            exit(RenderStates.run(directory: CommandLine.arguments[i + 1]) ? 0 : 1)
+        }
         migrateLegacyDataDirectory()
         NSApp.setActivationPolicy(.accessory) // LSUIElement equivalent: no Dock icon
         HotKeyManager.shared.onHotKey = {

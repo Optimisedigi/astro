@@ -120,13 +120,11 @@ struct ChatView: View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(state.session.messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
-                        }
+                    if state.session.messages.isEmpty {
+                        EmptyChatView().padding(.top, 60)
+                    } else {
+                        MessageListView(messages: state.session.messages)
                     }
-                    .padding()
                 }
                 .onChange(of: state.session.messages.last?.text) { _, _ in
                     if let last = state.session.messages.last {
@@ -233,6 +231,43 @@ struct ScheduleListView: View {
                 .padding()
             }
         }
+    }
+}
+
+/// First thing you see in a new conversation.
+struct EmptyChatView: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("Ask anything")
+                .font(.headline)
+            Text("Universe can read files, run commands and remind you later.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 260)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Empty conversation. Ask anything.")
+    }
+}
+
+/// The conversation itself, without the scroll container — so `--render-states`
+/// can rasterise it offscreen (ImageRenderer does not draw ScrollView contents).
+struct MessageListView: View {
+    let messages: [Session.Message]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(messages) { message in
+                MessageBubble(message: message).id(message.id)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
