@@ -7,6 +7,26 @@ enum StreamEvent {
     case stop(reason: String)
 }
 
+/// What the UI is told about a tool call, so it can show a row rather than a status string.
+enum ToolActivity {
+    case started(id: String, name: String, detail: String?)
+    case finished(id: String, failed: Bool)
+
+    /// The most useful single argument to show next to the tool name.
+    static func detail(for input: [String: Any]) -> String? {
+        for key in ["file_path", "command", "pattern", "path", "url", "name", "query"] {
+            if let value = input[key] as? String, !value.isEmpty { return String(value.prefix(80)) }
+        }
+        return nil
+    }
+
+    /// Tools report failure in their output text; there is no separate error channel.
+    static func looksLikeFailure(_ output: String) -> Bool {
+        let head = output.prefix(200).lowercased()
+        return head.hasPrefix("error") || head.contains("escapes workspace") || head.contains("could not")
+    }
+}
+
 typealias EventStreamProvider = @Sendable ([[String: Any]], [[String: Any]]) -> AsyncThrowingStream<StreamEvent, Error>
 
 /// The agent loop: stream → execute tool calls → feed results back → repeat (SPEC.md §2).
@@ -17,12 +37,12 @@ struct AgentLoop {
     let registry = ToolRegistry.shared
 
     /// Runs the loop. `apiMessages` are Anthropic-format messages (content blocks).
-    /// `onText` fires per streamed delta; `onToolActivity` reports tool start/result for UI.
+    /// `onText` fires per streamed delta; `onToolActivity` reports tool start/finish for UI.
     func run(
         apiMessages: [[String: Any]],
         streamProvider: EventStreamProvider,
         onText: @escaping @MainActor (String) -> Void,
-        onToolActivity: @escaping @MainActor (String) -> Void
+        onToolActivity: @escaping @MainActor (ToolActivity) -> Void
     ) async throws {
         var messages = apiMessages
         var turns = 0
@@ -63,9 +83,9 @@ struct AgentLoop {
             // Execute tools, collect tool_result blocks
             var results: [[String: Any]] = []
             for tool in pendingTools {
-                await onToolActivity(tool.name)
+                await onToolActivity(.started(id: tool.id, name: tool.name, detail: ToolActivity.detail(for: tool.input)))
                 let output = await registry.run(name: tool.name, input: tool.input, workingDirectory: workspace)
-                await onToolActivity("\(tool.name) done")
+                await onToolActivity(.finished(id: tool.id, failed: ToolActivity.looksLikeFailure(output)))
                 results.append([
                     "type": "tool_result",
                     "tool_use_id": tool.id,

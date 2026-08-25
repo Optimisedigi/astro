@@ -84,7 +84,7 @@ enum SelfTest {
         }
 
         var streamedText = ""
-        var toolActivities: [String] = []
+        var toolActivities: [ToolActivity] = []
         let loop = AgentLoop(workspace: workspace)
         do {
             try await loop.run(
@@ -98,7 +98,14 @@ enum SelfTest {
         }
 
         check(turns == 2, "loop ran 2 turns (tool_use → end_turn)")
-        check(toolActivities.contains("write"), "loop dispatched the write tool")
+        check(toolActivities.contains { if case .started(_, "write", _) = $0 { return true }; return false },
+              "loop dispatched the write tool")
+        check(toolActivities.contains { if case .finished(_, let failed) = $0 { return !failed }; return false },
+              "loop reported the write tool finishing successfully")
+        check(toolActivities.contains { if case .started(_, _, let detail) = $0 { return detail == "loop.txt" }; return false },
+              "tool row shows the file it touched")
+        check(ToolActivity.looksLikeFailure("Error: nope") && !ToolActivity.looksLikeFailure("Wrote 3 lines"),
+              "tool failure detection")
         check(streamedText == "File created.", "loop fed tool_result back to the model")
         let onDisk = (try? String(contentsOf: workspace.appendingPathComponent("loop.txt"), encoding: .utf8)) ?? ""
         check(onDisk == "written by the agent loop", "file exists on disk with model-requested content")

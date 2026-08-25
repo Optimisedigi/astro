@@ -5,10 +5,12 @@ final class ChatState: ObservableObject {
     @Published var session = Session(title: "New conversation")
     @Published var input = ""
     @Published var isStreaming = false
-    @Published var toolActivity: String?
+    @Published var toolRuns: [ToolRun] = []
     @Published var errorMessage: String?
 
     let store = SessionStore()
+    /// Smooths lumpy token bursts into steady typing.
+    private let queue = CharacterQueue()
     let voice = VoiceService()
     let speech = SpeechService()
     @Published var voiceMode = false
@@ -50,6 +52,28 @@ final class ChatState: ObservableObject {
         return dir
     }()
 
+    /// Tool rows survive the turn so the transcript still shows what ran.
+    private func apply(_ activity: ToolActivity) {
+        switch activity {
+        case .started(let id, let name, let detail):
+            toolRuns.append(ToolRun(id: id, name: name, detail: detail))
+        case .finished(let id, let failed):
+            guard let index = toolRuns.firstIndex(where: { $0.id == id }) else { return }
+            toolRuns[index].status = failed ? .failed : .done
+        }
+    }
+
+    func retryLastMessage() {
+        guard !isStreaming, let last = session.messages.last(where: { $0.role == "user" })?.text else { return }
+        // Drop the empty assistant placeholder left by the failed turn.
+        if session.messages.last?.role == "assistant", session.messages.last?.text.isEmpty == true {
+            session.messages.removeLast()
+        }
+        if session.messages.last?.role == "user" { session.messages.removeLast() }
+        input = last
+        send()
+    }
+
     func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isStreaming else { return }
@@ -61,6 +85,7 @@ final class ChatState: ObservableObject {
             session.title = String(text.prefix(40))
         }
         session.messages.append(.init(role: "assistant", text: ""))
+        toolRuns.removeAll()
         session.updatedAt = Date()
         isStreaming = true
 
@@ -70,27 +95,31 @@ final class ChatState: ObservableObject {
 
         Task {
             defer {
+                queue.finish()
                 isStreaming = false
-                toolActivity = nil
                 session.updatedAt = Date()
                 store.save(session)
             }
             do {
                 let loop = AgentLoop(workspace: workspace)
                 if voiceMode { voice.stopListening() }
-                try await loop.run(apiMessages: apiMessages, streamProvider: ClaudeService.shared.streamEvents) { [weak self] delta in
+                queue.reset()
+                queue.onVisible = { [weak self] text in
                     guard let self, let last = self.session.messages.indices.last else { return }
-                    self.session.messages[last].text += delta
-                } onToolActivity: { [weak self] activity in
-                    self?.toolActivity = activity.hasSuffix("done") ? nil : "⚙️ \(activity)"
+                    self.session.messages[last].text = text
                 }
+                try await loop.run(apiMessages: apiMessages, streamProvider: ClaudeService.shared.streamEvents) { [weak self] delta in
+                    self?.queue.append(delta)
+                } onToolActivity: { [weak self] activity in
+                    self?.apply(activity)
+                }
+                queue.finish() // flush before anything reads the final text
                 if voiceMode {
                     speech.speak(session.messages[session.messages.count - 1].text)
                     resumeListeningAfterReply()
                 }
             } catch {
                 errorMessage = error.localizedDescription
-                session.messages[session.messages.count - 1].text = "⚠️ \(error.localizedDescription)"
                 if voiceMode { try? voice.startListening() }
             }
         }
@@ -117,27 +146,24 @@ struct ChatView: View {
     }
 
     private var chatBody: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    if state.session.messages.isEmpty {
-                        EmptyChatView().padding(.top, 60)
-                    } else {
-                        MessageListView(messages: state.session.messages)
-                    }
-                }
-                .onChange(of: state.session.messages.last?.text) { _, _ in
-                    if let last = state.session.messages.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
+        ScrollViewReader { proxy in
+            ScrollView {
+                if state.session.messages.isEmpty {
+                    EmptyChatView().padding(.top, 60)
+                } else {
+                    MessageListView(
+                        messages: state.session.messages,
+                        toolRuns: state.toolRuns,
+                        isStreaming: state.isStreaming,
+                        errorMessage: state.errorMessage,
+                        retry: state.retryLastMessage
+                    )
                 }
             }
-
-            if let activity = state.toolActivity {
-                Text(activity)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 4)
+            .onChange(of: state.session.messages.last?.text) { _, _ in
+                if let last = state.session.messages.last {
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
             }
         }
     }
@@ -259,11 +285,29 @@ struct EmptyChatView: View {
 /// can rasterise it offscreen (ImageRenderer does not draw ScrollView contents).
 struct MessageListView: View {
     let messages: [Session.Message]
+    var toolRuns: [ToolRun] = []
+    var isStreaming = false
+    var errorMessage: String?
+    var retry: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(messages) { message in
-                MessageBubble(message: message).id(message.id)
+                // An assistant turn that has not produced text yet shows a skeleton or
+                // tool rows instead of an empty bubble.
+                if !(message.role == "assistant" && message.text.isEmpty) {
+                    MessageBubble(message: message, isStreaming: isStreaming && message.id == messages.last?.id)
+                        .id(message.id)
+                }
+            }
+            if !toolRuns.isEmpty {
+                ToolIndicatorView(runs: toolRuns)
+            }
+            if isStreaming, messages.last?.text.isEmpty == true, toolRuns.isEmpty {
+                SkeletonView()
+            }
+            if let errorMessage {
+                ErrorTextBlock(message: errorMessage, retry: retry)
             }
         }
         .padding()
@@ -273,12 +317,12 @@ struct MessageListView: View {
 
 struct MessageBubble: View {
     let message: Session.Message
+    var isStreaming = false
 
     var body: some View {
-        HStack {
+        HStack(alignment: .top) {
             if message.role == "user" { Spacer(minLength: 40) }
-            Text(message.text)
-                .textSelection(.enabled)
+            content
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(
@@ -286,6 +330,15 @@ struct MessageBubble: View {
                     in: RoundedRectangle(cornerRadius: 12)
                 )
             if message.role != "user" { Spacer(minLength: 40) }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if message.role == "user" {
+            Text(message.text).textSelection(.enabled)
+        } else {
+            ResponseTextView(text: message.text, isStreaming: isStreaming)
         }
     }
 }
