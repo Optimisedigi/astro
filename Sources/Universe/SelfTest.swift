@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Offline proof that the agent loop executes tools end-to-end (no API key needed).
@@ -116,8 +117,79 @@ enum SelfTest {
         // 4. Markdown scanner
         runMarkdownChecks(check: check)
 
+        // 5. OAuth sign-in (pure logic only — no network)
+        await runOAuthChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
+    }
+
+    static func runOAuthChecks(check: (Bool, String) -> Void) async {
+        let login = AnthropicOAuth.beginLogin()
+        let items = URLComponents(url: login.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        func param(_ name: String) -> String? { items.first { $0.name == name }?.value }
+
+        check(login.url.host == "claude.ai" && login.url.path == "/oauth/authorize", "oauth: authorize endpoint")
+        check(param("client_id") == AnthropicOAuth.clientID, "oauth: client id matches the learning-ai site")
+        check(param("redirect_uri") == AnthropicOAuth.redirectURI, "oauth: redirect uri matches the site")
+        check(param("scope") == AnthropicOAuth.scopes, "oauth: scopes match the site")
+        check(param("response_type") == "code" && param("code") == "true", "oauth: paste-code response type")
+        check(param("code_challenge_method") == "S256", "oauth: PKCE uses S256")
+
+        // The challenge must be the base64url SHA-256 of the verifier, unpadded.
+        let expected = Data(SHA256.hash(data: Data(login.verifier.utf8))).base64URLEncodedString()
+        check(param("code_challenge") == expected, "oauth: challenge is SHA-256 of the verifier")
+        check(!expected.contains("=") && !expected.contains("+") && !expected.contains("/"),
+              "oauth: challenge is base64url without padding")
+
+        // Verifier and state must be unguessable and never repeat between attempts.
+        let second = AnthropicOAuth.beginLogin()
+        check(login.verifier != second.verifier && login.state != second.state, "oauth: verifier and state are fresh per attempt")
+        check(login.verifier.count >= 43 && login.state.count >= 43, "oauth: 256 bits of entropy per secret")
+
+        // Paste parsing: every shape a user can bring back.
+        let plain = try? AnthropicOAuth.parsePastedCode("abc123")
+        check(plain?.code == "abc123" && plain?.state == nil, "oauth: bare code parses")
+        let hashed = try? AnthropicOAuth.parsePastedCode("  abc123#st4te \n")
+        check(hashed?.code == "abc123" && hashed?.state == "st4te", "oauth: code#state parses and trims")
+        let fromURL = try? AnthropicOAuth.parsePastedCode("https://platform.claude.com/oauth/code/callback?code=xyz&state=s1")
+        check(fromURL?.code == "xyz" && fromURL?.state == "s1", "oauth: whole callback URL parses")
+        check((try? AnthropicOAuth.parsePastedCode("")) == nil, "oauth: empty paste rejected")
+        check((try? AnthropicOAuth.parsePastedCode("not a code!")) == nil, "oauth: junk paste rejected")
+        check((try? AnthropicOAuth.parsePastedCode(String(repeating: "a", count: 5000))) == nil, "oauth: oversized paste rejected")
+
+        // A code carrying someone else's state must never be exchanged.
+        do {
+            try await AnthropicOAuth.completeLogin(pastedCode: "abc123#wrongstate", pending: login)
+            check(false, "oauth: state mismatch blocks the exchange")
+        } catch let error as AnthropicOAuth.OAuthError {
+            check(error == .stateMismatch, "oauth: state mismatch blocks the exchange")
+        } catch {
+            check(false, "oauth: state mismatch blocks the exchange")
+        }
+
+        check(AnthropicOAuth.constantTimeEquals("abc", "abc"), "oauth: state compare accepts a match")
+        check(!AnthropicOAuth.constantTimeEquals("abc", "abd"), "oauth: state compare rejects a mismatch")
+        check(!AnthropicOAuth.constantTimeEquals("abc", "abcd"), "oauth: state compare rejects a length mismatch")
+
+        // Expiry maths drives refresh; get it wrong and sessions die or never renew.
+        var tokens = AnthropicOAuth.Tokens(json: ["access_token": "t", "refresh_token": "r", "expires_in": 3600.0])
+        check(tokens?.accessToken == "t" && tokens?.refreshToken == "r", "oauth: token response decodes")
+        check(tokens?.needsRefresh == false && tokens?.isExpired == false, "oauth: fresh token is not refreshed")
+        tokens?.expiresAt = Date().addingTimeInterval(60)
+        check(tokens?.needsRefresh == true && tokens?.isExpired == false, "oauth: near-expiry token refreshes early")
+        tokens?.expiresAt = Date().addingTimeInterval(-1)
+        check(tokens?.isExpired == true, "oauth: past-expiry token is expired")
+        check(AnthropicOAuth.Tokens(json: ["refresh_token": "r"]) == nil, "oauth: response without an access token is rejected")
+
+        // Keychain round trip, then a clean sign-out.
+        let hadSession = AnthropicOAuth.isSignedIn
+        if !hadSession, let sample = AnthropicOAuth.Tokens(json: ["access_token": "selftest", "expires_in": 3600.0]) {
+            AnthropicOAuth.TokenStore.save(sample)
+            check(AnthropicOAuth.TokenStore.load()?.accessToken == "selftest", "oauth: tokens round-trip through the Keychain")
+            AnthropicOAuth.signOut()
+            check(!AnthropicOAuth.isSignedIn, "oauth: sign-out clears the Keychain")
+        }
     }
 
     static func runMarkdownChecks(check: (Bool, String) -> Void) {

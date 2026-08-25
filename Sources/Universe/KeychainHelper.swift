@@ -1,7 +1,8 @@
 import Foundation
 import Security
 
-/// Minimal Keychain wrapper for the Anthropic API key (never UserDefaults for secrets).
+/// Minimal Keychain wrapper for credentials — API key and OAuth tokens.
+/// Secrets never go to UserDefaults, a plist, or a log line.
 enum KeychainHelper {
     private static let service = "com.universe.apikeys"
     private static let legacyService = "com.tamaclone.apikeys"
@@ -16,6 +17,9 @@ enum KeychainHelper {
         SecItemDelete(query as CFDictionary)
         var item = query
         item[kSecValueData as String] = data
+        /* Device-only and not until first unlock: the secret never syncs to iCloud
+           Keychain and is unreadable while the machine is locked at boot. */
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(item as CFDictionary, nil)
     }
 
@@ -28,6 +32,16 @@ enum KeychainHelper {
             return legacy
         }
         return nil
+    }
+
+    static func remove(account: String) {
+        for service in [service, legacyService] {
+            SecItemDelete([
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+            ] as CFDictionary)
+        }
     }
 
     private static func read(service: String, account: String) -> String? {

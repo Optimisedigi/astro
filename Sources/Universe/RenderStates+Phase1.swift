@@ -108,3 +108,38 @@ extension RenderStates {
         ]
     }
 }
+
+/// Sign-in states asserted by `--render-states`.
+@MainActor
+extension RenderStates {
+    private static func loginModel(_ phase: LoginModel.Phase, code: String = "") -> LoginModel {
+        let model = LoginModel()
+        model.previewPhase = phase
+        model.pastedCode = code
+        return model
+    }
+
+    static var phase2States: [State] {
+        [
+            State("login-idle", size: CGSize(width: 460, height: 200)) {
+                LoginView(model: loginModel(.idle)).background(Color(nsColor: .windowBackgroundColor))
+            },
+            State("login-awaiting-code", size: CGSize(width: 460, height: 240)) {
+                LoginView(model: loginModel(.awaitingCode)).background(Color(nsColor: .windowBackgroundColor))
+            },
+            State("login-exchanging", size: CGSize(width: 460, height: 260)) {
+                LoginView(model: loginModel(.exchanging, code: "abc123")).background(Color(nsColor: .windowBackgroundColor))
+            },
+            State("login-failed", size: CGSize(width: 460, height: 320)) {
+                LoginView(model: loginModel(.failed("This code belongs to a different sign-in attempt. Start again.")))
+                    .background(Color(nsColor: .windowBackgroundColor))
+            },
+            State("login-signed-in", size: CGSize(width: 460, height: 200)) {
+                LoginView(model: loginModel(.signedIn)).background(Color(nsColor: .windowBackgroundColor))
+            },
+            State("chat-signed-out", size: CGSize(width: 420, height: 320)) {
+                panel { EmptyChatView(needsSignIn: true, signIn: {}) }
+            },
+        ]
+    }
+}

@@ -49,9 +49,11 @@ Never hard-code a hex colour: semantic colours give light/dark and contrast for 
 `Universe --render-states <dir>` rasterises registered UI states offscreen with
 `ImageRenderer` and fails if a state is the wrong size or effectively blank.
 
-`ImageRenderer` does **not** rasterise `ScrollView` contents, lazy stacks, or `TextField`.
-Register **content views** (e.g. `MessageListView`), not whole panels, and keep content
-views free of lazy containers so they stay renderable.
+`ImageRenderer` does **not** rasterise `ScrollView` contents, lazy stacks, `TextField`,
+`SecureField`, `ProgressView`, or `.link`-styled buttons — they come out as yellow
+placeholder bars. Register **content views** (e.g. `MessageListView`), not whole panels,
+keep content views free of lazy containers, and read a placeholder bar as "this control
+is not gated", not as a failure. Layout, copy and every custom-drawn view still gate.
 
 Gates for every phase: `swift build` · `--selftest` · `--render-states` · `xcodebuild`
 plus a launch-and-quit smoke run.

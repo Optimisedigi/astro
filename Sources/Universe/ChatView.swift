@@ -15,6 +15,11 @@ final class ChatState: ObservableObject {
     let speech = SpeechService()
     @Published var voiceMode = false
 
+    /// No Claude session and no API key: the user cannot ask anything yet.
+    var needsSignIn: Bool {
+        !AnthropicOAuth.isSignedIn && (KeychainHelper.get(account: "anthropic")?.isEmpty ?? true)
+    }
+
     func enableVoiceMode() {
         voiceMode = true
         voice.onUtterance = { [weak self] text in
@@ -149,7 +154,8 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 if state.session.messages.isEmpty {
-                    EmptyChatView().padding(.top, 60)
+                    EmptyChatView(needsSignIn: state.needsSignIn) { SettingsWindowController.shared.show() }
+                        .padding(.top, 60)
                 } else {
                     MessageListView(
                         messages: state.session.messages,
@@ -262,22 +268,32 @@ struct ScheduleListView: View {
 
 /// First thing you see in a new conversation.
 struct EmptyChatView: View {
+    /// Without a credential there is nothing to ask, so the empty state becomes the door in.
+    var needsSignIn = false
+    var signIn: (() -> Void)?
+
     var body: some View {
         VStack(spacing: 8) {
-            Image(systemName: "bubble.left.and.bubble.right")
+            Image(systemName: needsSignIn ? "person.crop.circle" : "bubble.left.and.bubble.right")
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("Ask anything")
+            Text(needsSignIn ? "Sign in to Claude" : "Ask anything")
                 .font(.headline)
-            Text("Universe can read files, run commands and remind you later.")
+            Text(needsSignIn
+                 ? "Universe uses your Claude subscription. No API key needed."
+                 : "Universe can read files, run commands and remind you later.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 260)
+            if needsSignIn, let signIn {
+                Button("Sign in with Claude", action: signIn)
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Empty conversation. Ask anything.")
+        .accessibilityElement(children: .contain)
     }
 }
 
