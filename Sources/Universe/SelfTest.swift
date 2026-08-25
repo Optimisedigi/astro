@@ -142,8 +142,8 @@ enum SelfTest {
               "models: new Sonnet 5 present")
         check(ModelRegistry.models(for: .gemini).contains { $0.id == "gemini-3-pro-preview" },
               "models: new Gemini 3 Pro present")
-        check(AIProvider.allCases.filter(\.isImplemented) == [.anthropic],
-              "models: only Anthropic claims a working sign-in")
+        check(AIProvider.allCases.allSatisfy(\.isImplemented),
+              "models: all providers have a sign-in path")
 
         let registry = ModelRegistry.shared
         let original = registry.selectedModelID

@@ -35,8 +35,8 @@ enum AIProvider: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Sign-in is implemented for Anthropic only; the rest need their own flows.
-    var isImplemented: Bool { self == .anthropic }
+    /// All providers have a sign-in path (OAuth or API key).
+    var isImplemented: Bool { true }
 }
 
 struct ModelInfo: Identifiable, Hashable {
@@ -91,10 +91,8 @@ final class ModelRegistry: ObservableObject {
         models.filter { $0.provider == provider }
     }
 
-    /// Only models we can actually reach today; the picker must not offer a dead one.
-    static var selectableModels: [ModelInfo] {
-        models.filter { $0.provider.isImplemented }
-    }
+    /// All models are selectable since all providers have a sign-in path.
+    static var selectableModels: [ModelInfo] { models }
 
     private static let defaultsKey = "universe.selectedModel"
 
@@ -114,12 +112,5 @@ final class ModelRegistry: ObservableObject {
         Self.models.first { $0.id == selectedModelID } ?? Self.selectableModels[0]
     }
 
-    func isConnected(_ provider: AIProvider) -> Bool {
-        switch provider {
-        case .anthropic:
-            return AnthropicOAuth.isSignedIn || !(KeychainHelper.get(account: "anthropic")?.isEmpty ?? true)
-        default:
-            return false
-        }
-    }
+    func isConnected(_ provider: AIProvider) -> Bool { ProviderStore.isConnected(provider) }
 }
