@@ -139,7 +139,10 @@ struct EditTool: AgentTool {
 
 final class ToolRegistry {
     static let shared = ToolRegistry()
-    let tools: [any AgentTool] = [BashTool(), ReadTool(), WriteTool(), EditTool()]
+    let tools: [any AgentTool] = [
+        BashTool(), ReadTool(), WriteTool(), EditTool(),
+        CreateReminderTool(), CreateRoutineTool(), ListSchedulesTool(), DeleteScheduleTool(),
+    ]
 
     var schemas: [[String: Any]] {
         tools.map { ["name": $0.name, "description": $0.description, "input_schema": $0.inputSchema] }

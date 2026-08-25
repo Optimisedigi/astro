@@ -103,7 +103,69 @@ enum SelfTest {
         let onDisk = (try? String(contentsOf: workspace.appendingPathComponent("loop.txt"), encoding: .utf8)) ?? ""
         check(onDisk == "written by the agent loop", "file exists on disk with model-requested content")
 
+        // 3. Schedule parsing + schedule tools
+        await runScheduleChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
+    }
+
+    // Schedule parsing + store checks run before UI exists, so they can use ScheduleStore safely.
+    @MainActor
+    static func runScheduleChecks(check: (Bool, String) -> Void) async {
+        // Parser: every documented form
+        check(ScheduleParser.parse("30m") != nil, "parse '30m'")
+        check(ScheduleParser.parse("in 10 minutes") != nil, "parse 'in 10 minutes'")
+        check(ScheduleParser.parse("every 2h") != nil, "parse 'every 2h'")
+        check(ScheduleParser.parse("tomorrow 3pm") != nil, "parse 'tomorrow 3pm'")
+        check(ScheduleParser.parse("monday 9:30am") != nil, "parse 'monday 9:30am'")
+        check(ScheduleParser.parse("0 9 * * *")?.scheduleType == "cron", "parse cron '0 9 * * *'")
+        check(ScheduleParser.parse("garbage") == nil, "reject unparseable schedule")
+
+        // Cron next-run: '0 9 * * *' lands at 09:00
+        if let next = CronSchedule.next(after: Date(), expression: "0 9 * * *") {
+            let c = Calendar.current.dateComponents([.hour, .minute], from: next)
+            check(c.hour == 9 && c.minute == 0, "cron next run at 09:00")
+        } else {
+            check(false, "cron next run at 09:00")
+        }
+
+        // Tool output formats match Tama's
+        let wd = FileManager.default.temporaryDirectory
+        let created = try? await CreateReminderTool().run(input: [
+            "name": "test", "message": "hi", "schedule": "30m",
+        ], workingDirectory: wd)
+        check(created?.contains(#""success": true"#) == true && created?.contains(#""type": "reminder"#) == true,
+              "create_reminder JSON format")
+        let bad = try? await CreateReminderTool().run(input: [
+            "name": "x", "message": "y", "schedule": "whenever",
+        ], workingDirectory: wd)
+        check(bad?.contains("Could not parse schedule") == true, "create_reminder rejects bad schedule")
+        let deleted = try? await DeleteScheduleTool().run(input: ["name": "test"], workingDirectory: wd)
+        check(deleted?.contains("Deleted schedule 'test'") == true, "delete_schedule JSON format")
+
+        // Firing: drive the poll with an injected future clock (no waiting).
+        let store = ScheduleStore.shared
+        _ = store.create(name: "once-job", kind: .reminder, schedule: "30m", message: "one shot")
+        _ = store.create(name: "repeat-job", kind: .reminder, schedule: "every 1m", message: "recurring")
+        check(store.jobs.count == 2, "two jobs armed")
+
+        let future = Date().addingTimeInterval(3600) // past both due times
+        store.fireDue(now: future)
+        check(store.deliveredWithoutBundle.contains { $0.contains("once-job") }, "once job fired")
+        check(store.deliveredWithoutBundle.contains { $0.contains("repeat-job") }, "recurring job fired")
+        check(!store.jobs.contains { $0.name == "once-job" }, "once job consumed after firing")
+
+        let repeats = store.jobs.filter { $0.name == "repeat-job" }
+        check(repeats.count == 1, "recurring job re-armed exactly once (no duplicate)")
+        check(repeats.first.map { $0.nextRun > future } == true, "recurring job re-armed into the future")
+
+        // Second poll at the same instant must not re-fire the re-armed job
+        let before = store.deliveredWithoutBundle.count
+        store.fireDue(now: future)
+        check(store.deliveredWithoutBundle.count == before, "re-armed job does not immediately re-fire")
+
+        _ = store.delete(name: "repeat-job")
+        check(store.jobs.isEmpty, "cleanup: no jobs left behind")
     }
 }

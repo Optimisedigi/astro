@@ -99,8 +99,24 @@ final class ChatState: ObservableObject {
 
 struct ChatView: View {
     @ObservedObject var state: ChatState
+    @ObservedObject private var schedules = ScheduleStore.shared
+    @State private var showSchedules = false
 
     var body: some View {
+        VStack(spacing: 0) {
+            if showSchedules {
+                ScheduleListView(store: schedules)
+            } else {
+                chatBody
+            }
+            inputBar
+        }
+        .frame(width: 420, height: 560)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var chatBody: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -125,32 +141,98 @@ struct ChatView: View {
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 4)
             }
-
-            HStack(spacing: 8) {
-                Button(action: { state.voiceMode ? state.disableVoiceMode() : state.enableVoiceMode() }) {
-                    Image(systemName: state.voiceMode ? "mic.fill" : "mic")
-                        .font(.title2)
-                        .foregroundStyle(state.voiceMode ? Color.red : Color.primary)
-                }
-                .buttonStyle(.plain)
-                .help("Toggle voice mode")
-                TextField(state.voiceMode ? "Listening…" : "Type anything…", text: $state.input)
-                    .textFieldStyle(.plain)
-                    .padding(8)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                    .onSubmit { state.send() }
-                Button(action: { state.send() }) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                }
-                .buttonStyle(.plain)
-                .disabled(state.input.trimmingCharacters(in: .whitespaces).isEmpty || state.isStreaming)
-            }
-            .padding()
         }
-        .frame(width: 420, height: 560)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var inputBar: some View {
+        HStack(spacing: 8) {
+            Button(action: { state.voiceMode ? state.disableVoiceMode() : state.enableVoiceMode() }) {
+                Image(systemName: state.voiceMode ? "mic.fill" : "mic")
+                    .font(.title2)
+                    .foregroundStyle(state.voiceMode ? Color.red : Color.primary)
+            }
+            .buttonStyle(.plain)
+            .help("Toggle voice mode")
+
+            Button(action: { showSchedules.toggle() }) {
+                Image(systemName: showSchedules ? "bell.fill" : "bell")
+                    .font(.title2)
+                    .foregroundStyle(showSchedules ? Color.accentColor : Color.primary)
+                    .overlay(alignment: .topTrailing) {
+                        if !schedules.jobs.isEmpty && !showSchedules {
+                            Circle().fill(Color.red).frame(width: 6, height: 6).offset(x: 2, y: -1)
+                        }
+                    }
+            }
+            .buttonStyle(.plain)
+            .help("Reminders & routines")
+
+            TextField(state.voiceMode ? "Listening…" : "Type anything…", text: $state.input)
+                .textFieldStyle(.plain)
+                .padding(8)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                .onSubmit { showSchedules = false; state.send() }
+            Button(action: { showSchedules = false; state.send() }) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.title2)
+            }
+            .buttonStyle(.plain)
+            .disabled(state.input.trimmingCharacters(in: .whitespaces).isEmpty || state.isStreaming)
+        }
+        .padding()
+    }
+}
+
+/// Reminders + routines pane.
+struct ScheduleListView: View {
+    @ObservedObject var store: ScheduleStore
+
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        ScrollView {
+            if store.jobs.isEmpty {
+                Text("No reminders yet. Ask Tama to set one for you.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(store.jobs) { job in
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: job.kind == .reminder ? "alarm" : "arrow.triangle.2.circlepath")
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(job.name).fontWeight(.medium)
+                                Text(job.message)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                Text("\(job.schedule) · next \(Self.formatter.string(from: job.nextRun))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Spacer()
+                            Button {
+                                _ = store.delete(name: job.name)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(10)
+                        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+                .padding()
+            }
+        }
     }
 }
 

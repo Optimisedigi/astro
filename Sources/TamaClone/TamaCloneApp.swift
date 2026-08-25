@@ -36,5 +36,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             PanelController.shared.toggle()
         }
         HotKeyManager.shared.register()
+        ScheduleStore.shared.start()
     }
 }
