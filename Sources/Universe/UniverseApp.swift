@@ -38,6 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             exit(RenderStates.run(directory: CommandLine.arguments[i + 1]) ? 0 : 1)
         }
+        guard claimSingleInstance() else { return }
+
         migrateLegacyDataDirectory()
         NSApp.setActivationPolicy(.accessory) // LSUIElement equivalent: no Dock icon
         HotKeyManager.shared.onHotKey = {
@@ -45,6 +47,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         HotKeyManager.shared.register()
         ScheduleStore.shared.start()
+
+        /* Without a Dock icon or a launch window, double-clicking the app looks like
+           nothing happened. Show the panel so launching has a visible result — except
+           when macOS started us at login, where a panel appearing would be a jump scare. */
+        if !launchedAsLoginItem {
+            PanelController.shared.show()
+        }
+    }
+
+    /// Clicking the app in Finder, the Dock, or Spotlight while it is already running.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        PanelController.shared.show()
+        return true
+    }
+
+    private var launchedAsLoginItem: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
+        return event.eventID == kAEOpenApplication
+            && event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+    }
+
+    /// Two copies of the same bundle ID can run from different paths (a build folder
+    /// and /Applications), which means two menubar icons and a hotkey that only reaches
+    /// one of them. Hand off to the copy that got here first and exit.
+    private func claimSingleInstance() -> Bool {
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        guard let existing = others.first else { return true }
+        existing.activate()
+        NSApp.terminate(nil)
+        return false
     }
 
     /// The app was renamed from TamaClone; move existing sessions, schedules and

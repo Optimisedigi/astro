@@ -45,12 +45,17 @@ final class PanelController {
         panel = FloatingPanel(contentRect: rect, contentView: hostingView)
     }
 
+    /// Bring the panel up (idempotent) — used on launch and on reopen.
+    func show() {
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
     func toggle() {
         if panel.isVisible {
             panel.orderOut(nil)
         } else {
-            NSApp.activate(ignoringOtherApps: true)
-            panel.makeKeyAndOrderFront(nil)
+            show()
         }
     }
 }
