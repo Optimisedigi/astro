@@ -1,43 +1,39 @@
 import SwiftUI
 
-/// A custom tab bar with a sliding highlight indicator that animates between tabs.
-/// Matches tama-agent's AnimatedTabBar but built in SwiftUI.
+/// SwiftUI mirror of tama-agent's AnimatedTabBar (AppKit): text-only labels,
+/// 1×14 dividers between tabs, dark track (white 0.25), sliding highlight pill
+/// (white 0.38, radius 6), 14pt semibold, white / 50%-white text, 0.2s ease.
 struct AnimatedTabBar: View {
-    let tabs: [Tab]
+    let labels: [String]
     @Binding var selectedIndex: Int
-
-    struct Tab: Identifiable {
-        let id: String
-        let label: String
-        let symbol: String
-    }
+    @Namespace private var highlight
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        selectedIndex = index
-                    }
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: tab.symbol)
-                            .font(.system(size: 12, weight: .semibold))
-                        Text(tab.label)
-                            .font(.system(size: 13, weight: .semibold))
-                    }
-                    .foregroundStyle(selectedIndex == index ? Color.white : Color.white.opacity(0.5))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
-                    .background(
-                        selectedIndex == index
-                            ? Color(white: 0.38)
-                            : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 6)
-                    )
+        HStack(spacing: 4) {
+            ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(width: 1, height: 14)
+                }
+                Button {
+                    ButtonSound.shared.play()
+                    withAnimation(.easeInOut(duration: 0.2)) { selectedIndex = index }
+                } label: {
+                    Text(label)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(selectedIndex == index ? .white : .white.opacity(0.5))
+                        .padding(.horizontal, 14)
+                        .frame(height: 28)
+                        .background {
+                            if selectedIndex == index {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color(white: 0.38))
+                                    .matchedGeometryEffect(id: "pill", in: highlight)
+                            }
+                        }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(tab.label)
                 .accessibilityAddTraits(selectedIndex == index ? .isSelected : [])
             }
         }

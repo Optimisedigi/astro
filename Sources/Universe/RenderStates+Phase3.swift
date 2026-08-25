@@ -12,8 +12,19 @@ extension RenderStates {
     static var phase3States: [State] {
         let state = ChatState()
         return [
-            State("topbar", size: CGSize(width: 420, height: 44)) {
-                sheet { TopBar(title: "Claude Sonnet 5", hasSchedules: true) }
+            State("input-row", size: CGSize(width: 680, height: 60)) {
+                HStack(spacing: 10) {
+                    MascotBadge()
+                    Text("Ask anything…")
+                        .font(.system(size: 26, weight: .light))
+                        .foregroundStyle(.white.opacity(0.35))
+                    Spacer()
+                    Image(systemName: "mic").foregroundStyle(.secondary)
+                }
+                .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 24))
+                .frame(width: 680, height: 58)
+                .environment(\.colorScheme, .dark)
+                .background(Color.black.opacity(0.85))
             },
             State("permissions-granted", size: CGSize(width: 420, height: 560)) {
                 sheet {

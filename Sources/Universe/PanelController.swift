@@ -17,6 +17,7 @@ final class FloatingPanel: NSPanel {
         hasShadow = true
         isMovableByWindowBackground = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        appearance = NSAppearance(named: .darkAqua) // Tama's panel is always dark glass
         self.contentView = contentView
     }
 
@@ -32,7 +33,7 @@ final class PanelController {
     let chatState = ChatState()
 
     private init() {
-        let width: CGFloat = 420
+        let width: CGFloat = 680
         let height: CGFloat = 560
         let screen = NSScreen.main?.visibleFrame ?? .init(x: 0, y: 0, width: 1440, height: 900)
         let rect = NSRect(

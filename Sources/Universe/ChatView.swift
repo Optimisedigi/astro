@@ -72,6 +72,12 @@ final class ChatState: ObservableObject {
         }
     }
 
+    /// Open a past conversation in the transcript view.
+    func loadSession(_ session: Session) {
+        guard !isStreaming else { return }
+        self.session = session
+    }
+
     func retryLastMessage() {
         guard !isStreaming, let last = session.messages.last(where: { $0.role == "user" })?.text else { return }
         // Drop the empty assistant placeholder left by the failed turn.
@@ -171,66 +177,66 @@ struct ChatView: View {
     @ObservedObject var state: ChatState
     @ObservedObject private var schedules = ScheduleStore.shared
     @ObservedObject private var registry = ModelRegistry.shared
-    @State private var showSchedules = false
     @State private var sheet: SettingsSheetKind?
     @State private var selectedTab = 0
+    /// True while a conversation is on screen instead of the Chats list.
+    @State private var showingTranscript = false
     @ObservedObject private var taskStore = TaskStore.shared
     @ObservedObject private var skillStore = SkillStore.shared
 
-    private let tabs = [
-        AnimatedTabBar.Tab(id: "chat", label: "Chat", symbol: "bubble.left"),
-        AnimatedTabBar.Tab(id: "sessions", label: "Sessions", symbol: "clock.arrow.circlepath"),
-        AnimatedTabBar.Tab(id: "tasks", label: "Tasks", symbol: "checklist"),
-        AnimatedTabBar.Tab(id: "routines", label: "Routines", symbol: "clock"),
-        AnimatedTabBar.Tab(id: "skills", label: "Skills", symbol: "wand.and.stars"),
-        AnimatedTabBar.Tab(id: "tools", label: "Tools", symbol: "wrench.and.screwdriver"),
-    ]
+    /// Tama's exact tab set, in its order.
+    private let tabLabels = ["Chats", "Reminders", "Routines", "Tasks", "Skills", "Tools"]
 
     var body: some View {
         VStack(spacing: 0) {
-            TopBar(
-                title: registry.selectedModel.name,
-                hasSchedules: !schedules.jobs.isEmpty,
-                openSheet: { sheet = $0 }
-            )
-            Divider()
+            // Tama's layout: input row on top, tabs below it, lists under that.
+            inputRow
+
+            Divider().padding(.horizontal, 20)
+
+            HStack {
+                AnimatedTabBar(labels: tabLabels, selectedIndex: $selectedTab)
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
 
             // Tab content
             switch selectedTab {
             case 0:
-                chatBody
-                inputBar
-            case 1:
-                SessionListView(store: state.store) { session in
-                    // Load session into chat
-                    state.store.loadSession(session.id)
-                    selectedTab = 0
-                } onDeleteSession: { session in
-                    state.store.deleteSession(session.id)
+                if showingTranscript {
+                    transcript
+                } else {
+                    SessionListView(store: state.store) { session in
+                        state.loadSession(session)
+                        showingTranscript = true
+                    } onDeleteSession: { session in
+                        state.store.deleteSession(session.id)
+                    }
                 }
+            case 1:
+                RoutineListView(store: schedules, kind: .reminder)
             case 2:
-                TaskListView(store: taskStore)
+                RoutineListView(store: schedules, kind: .routine)
             case 3:
-                RoutineListView(store: schedules)
+                TaskListView(store: taskStore)
             case 4:
                 SkillListView(store: skillStore)
             case 5:
                 ToolListView()
             default:
-                chatBody
-                inputBar
+                EmptyView()
             }
-
-            Divider()
-
-            // Tab bar at the bottom
-            AnimatedTabBar(tabs: tabs, selectedIndex: $selectedTab)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
         }
-        .frame(width: 420, height: 560)
-        .background(.regularMaterial)
+        .frame(width: 680, height: 560)
+        .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        .environment(\.colorScheme, .dark)
+        .onChange(of: state.isStreaming) { _, streaming in
+            // Sending a prompt swaps the list for the live conversation (Tama behavior).
+            if streaming { selectedTab = 0; showingTranscript = true }
+        }
         .onChange(of: state.requestedSheet) { _, requested in
             guard let requested else { return }
             sheet = requested
@@ -274,32 +280,49 @@ struct ChatView: View {
         }
     }
 
-    private var inputBar: some View {
-        HStack(spacing: 8) {
+    private var inputRow: some View {
+        HStack(spacing: 10) {
             MascotBadge()
+
+            TextField("Ask anything…", text: $state.input)
+                .textFieldStyle(.plain)
+                .font(.system(size: 26, weight: .light))
+                .lineLimit(1)
+                .onSubmit { state.send() }
+                .onChange(of: state.input) { _, _ in MascotController.shared.notifyKeystroke() }
 
             Button(action: { state.voiceMode ? state.disableVoiceMode() : state.enableVoiceMode() }) {
                 Image(systemName: state.voiceMode ? "mic.fill" : "mic")
-                    .font(.title2)
-                    .foregroundStyle(state.voiceMode ? Color.red : Color.primary)
+                    .font(.system(size: 16))
+                    .foregroundStyle(state.voiceMode ? Color.red : .secondary)
             }
             .buttonStyle(.plain)
             .help("Toggle voice mode")
-
-            TextField(state.voiceMode ? "Listening…" : "Type anything…", text: $state.input)
-                .textFieldStyle(.plain)
-                .padding(8)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                .onSubmit { showSchedules = false; state.send() }
-                .onChange(of: state.input) { _, _ in MascotController.shared.notifyKeystroke() }
-            Button(action: { showSchedules = false; state.send() }) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
-            }
-            .buttonStyle(.plain)
-            .disabled(state.input.trimmingCharacters(in: .whitespaces).isEmpty || state.isStreaming)
         }
-        .padding()
+        .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 24))
+        .frame(height: 58)
+    }
+
+    private var transcript: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button {
+                    showingTranscript = false
+                } label: {
+                    Label("Chats", systemImage: "chevron.left")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                Spacer()
+                Text(registry.selectedModel.name)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
+            chatBody
+        }
     }
 }
 

@@ -111,10 +111,9 @@ struct SessionRow: View {
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 10) {
-                Image(systemName: "bubble.left")
-                    .font(.system(size: 16))
+                Image(nsImage: MenuBarIcon.sessionIcon(mood: .afternoon))
+                    .renderingMode(.template)
                     .foregroundStyle(.secondary)
-                    .frame(width: 28)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.title)

@@ -4,12 +4,16 @@ import SwiftUI
 /// Matches tama-agent's RoutineListView styling.
 struct RoutineListView: View {
     @ObservedObject var store: ScheduleStore
+    /// Which job kind this tab shows (Tama has separate Reminders and Routines tabs).
+    var kind: ScheduleStore.Job.Kind = .routine
     @State private var isRunning: Set<UUID> = []
+
+    private var jobs: [ScheduleStore.Job] { store.jobs.filter { $0.kind == kind } }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Routines")
+                Text(kind == .reminder ? "Reminders" : "Routines")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -19,12 +23,12 @@ struct RoutineListView: View {
 
             Divider()
 
-            if store.jobs.isEmpty {
+            if jobs.isEmpty {
                 emptyState
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(store.jobs) { job in
+                        ForEach(jobs) { job in
                             RoutineRow(
                                 job: job,
                                 isRunning: isRunning.contains(job.id),
@@ -41,12 +45,13 @@ struct RoutineListView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Spacer()
-            Image(systemName: "clock")
+            Image(systemName: kind == .reminder ? "bell" : "clock")
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("No routines yet")
+            Text(kind == .reminder ? "No reminders yet" : "No routines yet")
                 .font(.headline)
-            Text("Ask Universe to set a reminder or create a routine.")
+            Text(kind == .reminder ? "Ask Universe to remind you about something."
+                                   : "Ask Universe to create a routine.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

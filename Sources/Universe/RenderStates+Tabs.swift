@@ -5,14 +5,16 @@ import SwiftUI
 extension RenderStates {
     static var tabStates: [State] {
         [
-            State("tab-bar", size: CGSize(width: 420, height: 44)) {
-                AnimatedTabBar(tabs: [
-                    .init(id: "chat", label: "Chat", symbol: "bubble.left"),
-                    .init(id: "tasks", label: "Tasks", symbol: "checklist"),
-                    .init(id: "routines", label: "Routines", symbol: "clock"),
-                    .init(id: "skills", label: "Skills", symbol: "wand.and.stars"),
-                ], selectedIndex: .constant(0))
-                .background(Color(nsColor: .windowBackgroundColor))
+            State("tab-bar", size: CGSize(width: 680, height: 44)) {
+                HStack {
+                    AnimatedTabBar(labels: ["Chats", "Reminders", "Routines", "Tasks", "Skills", "Tools"],
+                                   selectedIndex: .constant(0))
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 12)
+                .padding(.vertical, 5)
+                .environment(\.colorScheme, .dark)
+                .background(Color.black.opacity(0.85))
             },
             State("tasks-empty", size: CGSize(width: 420, height: 400)) {
                 TaskListView(store: {
@@ -35,8 +37,12 @@ extension RenderStates {
                 )
                 .background(Color(nsColor: .windowBackgroundColor))
             },
-            State("routines-empty", size: CGSize(width: 420, height: 400)) {
-                RoutineListView(store: ScheduleStore.shared)
+            State("routines-empty", size: CGSize(width: 420, height: 260)) {
+                RoutineListView(store: ScheduleStore.shared, kind: .routine)
+                    .background(Color(nsColor: .windowBackgroundColor))
+            },
+            State("reminders-empty", size: CGSize(width: 420, height: 260)) {
+                RoutineListView(store: ScheduleStore.shared, kind: .reminder)
                     .background(Color(nsColor: .windowBackgroundColor))
             },
             State("skills-empty", size: CGSize(width: 420, height: 400)) {
