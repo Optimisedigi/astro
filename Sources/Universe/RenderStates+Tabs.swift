@@ -47,9 +47,29 @@ extension RenderStates {
                 SessionListView(store: SessionStore.shared, onSelectSession: { _ in }, onDeleteSession: { _ in })
                     .background(Color(nsColor: .windowBackgroundColor))
             },
-            State("tools-list", size: CGSize(width: 420, height: 400)) {
-                ToolListView(tools: ToolRegistry.shared.tools)
-                    .background(Color(nsColor: .windowBackgroundColor))
+            // ScrollView bodies don't rasterise offscreen; gate the rows directly.
+            State("tools-rows", size: CGSize(width: 420, height: 200)) {
+                VStack(spacing: 0) {
+                    ForEach(PanelToolRegistry.shared.allTools, id: \.id) { tool in
+                        PanelToolRow(tool: tool, tick: 0, onTap: {}, onToggled: {})
+                    }
+                }
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(Color(nsColor: .windowBackgroundColor))
+            },
+            State("clipboard-rows", size: CGSize(width: 420, height: 200)) {
+                VStack(spacing: 0) {
+                    ClipboardRow(entry: ClipboardEntry(
+                        id: UUID(), timestamp: Date(), contentType: .text,
+                        textContent: "swift build && ./install.sh", imageData: nil, fileURL: nil,
+                        sourceAppName: "Terminal", sourceAppBundle: "com.apple.Terminal"), onCopy: {}, onDelete: {})
+                    ClipboardRow(entry: ClipboardEntry(
+                        id: UUID(), timestamp: Date(), contentType: .fileURL,
+                        textContent: nil, imageData: nil, fileURL: "/Users/Pe/Documents/report.pdf",
+                        sourceAppName: "Finder", sourceAppBundle: "com.apple.finder"), onCopy: {}, onDelete: {})
+                }
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(Color(nsColor: .windowBackgroundColor))
             },
         ]
     }

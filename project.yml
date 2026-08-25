@@ -18,6 +18,10 @@ targets:
     platform: macOS
     sources:
       - Sources/Universe
+      - path: Resources/sound-step.mp3
+        buildPhase: resources
+      - path: Resources/notification.mp3
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.universe.app

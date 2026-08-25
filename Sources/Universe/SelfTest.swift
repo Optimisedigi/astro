@@ -130,6 +130,9 @@ enum SelfTest {
         // 8. Task and skill stores
         runStoreChecks(check: check)
 
+        // 9. Clipboard history + panel tools
+        await runPanelToolChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
     }
@@ -183,6 +186,58 @@ enum SelfTest {
         // Restore original state
         for list in taskStore.taskLists { taskStore.delete(id: list.id) }
         for list in originalLists { taskStore.save(list) }
+    }
+
+    @MainActor
+    static func runPanelToolChecks(check: (Bool, String) -> Void) async {
+        let store = ClipboardStore.shared
+        let before = store.entries
+
+        func entry(_ text: String) -> ClipboardEntry {
+            ClipboardEntry(id: UUID(), timestamp: Date(), contentType: .text,
+                           textContent: text, imageData: nil, fileURL: nil,
+                           sourceAppName: "Selftest", sourceAppBundle: nil)
+        }
+
+        store.add(entry("clipboard selftest alpha"))
+        check(store.entries.first?.textContent == "clipboard selftest alpha", "clipboard: add inserts at front")
+        let countAfterFirst = store.entries.count
+        store.add(entry("clipboard selftest alpha"))
+        check(store.entries.count == countAfterFirst, "clipboard: identical text is deduplicated")
+
+        let long = ClipboardEntry(id: UUID(), timestamp: Date(), contentType: .text,
+                                  textContent: String(repeating: "word ", count: 30),
+                                  imageData: nil, fileURL: nil, sourceAppName: nil, sourceAppBundle: nil)
+        check(long.preview.count <= 51 && long.preview.hasSuffix("…"), "clipboard: preview truncates at word boundary")
+
+        let fileEntry = ClipboardEntry(id: UUID(), timestamp: Date(), contentType: .fileURL,
+                                       textContent: nil, imageData: nil, fileURL: "/tmp/example/report.pdf",
+                                       sourceAppName: nil, sourceAppBundle: nil)
+        check(fileEntry.preview == "report.pdf", "clipboard: file preview shows filename")
+        check(fileEntry.copyableText == "/tmp/example/report.pdf", "clipboard: file copies its path")
+
+        check(store.search(query: "selftest alpha").count == 1, "clipboard: search matches preview")
+        check(store.search(query: "zzz-no-match").isEmpty, "clipboard: search misses cleanly")
+
+        if let added = store.entries.first(where: { $0.textContent == "clipboard selftest alpha" }) {
+            store.delete(added)
+        }
+        check(store.entries.count == before.count, "clipboard: delete removes the entry")
+
+        // Panel tool registry (Night Shift may be absent on unsupported hardware)
+        let registry = PanelToolRegistry.shared
+        check(registry.allTools.contains { $0 is ClipboardHistoryTool }, "tools: clipboard history registered")
+        check(registry.allTools.contains { $0 is KeepAwakeTool }, "tools: keep awake registered")
+        check(registry.search(query: "clipboard").count == 1, "tools: search filters by name")
+        check(registry.search(query: "").count == registry.allTools.count, "tools: empty query returns all")
+
+        // Keep Awake really takes and releases a power assertion.
+        if let keepAwake = registry.allTools.first(where: { $0 is KeepAwakeTool }) as? KeepAwakeTool {
+            keepAwake.toggle()
+            check(keepAwake.isEnabled, "tools: keep awake enables")
+            keepAwake.toggle()
+            check(!keepAwake.isEnabled, "tools: keep awake releases")
+        }
     }
 
     @MainActor

@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         HotKeyManager.shared.register()
         ScheduleStore.shared.start()
+        ClipboardMonitor.shared.start()
 
         /* Without a Dock icon or a launch window, double-clicking the app looks like
            nothing happened. Show the panel so launching has a visible result — except

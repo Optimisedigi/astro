@@ -183,7 +183,7 @@ struct ChatView: View {
             case 4:
                 SkillListView(store: skillStore)
             case 5:
-                ToolListView(tools: ToolRegistry.shared.tools)
+                ToolListView()
             default:
                 chatBody
                 inputBar

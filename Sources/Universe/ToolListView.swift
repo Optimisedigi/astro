@@ -1,19 +1,27 @@
 import SwiftUI
 
-/// The Tools tab: list of available agent tools, matching tama-agent's ToolListView.
+/// The Tools tab: user-facing panel tools, matching tama-agent's ToolListView.
+/// Toggle tools (Keep Awake, Night Shift) flip inline with a pill switch;
+/// Clipboard History drills into its own view.
 struct ToolListView: View {
-    let tools: [AgentTool]
     @State private var query = ""
+    @State private var showingClipboard = false
+    /// Bumped by tool onStateChanged callbacks to re-render toggle states.
+    @State private var toggleTick = 0
 
-    private var filtered: [AgentTool] {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return tools }
-        return tools.filter {
-            $0.name.lowercased().contains(q) || $0.description.lowercased().contains(q)
+    private var filtered: [PanelTool] { PanelToolRegistry.shared.search(query: query) }
+
+    var body: some View {
+        if showingClipboard {
+            ClipboardHistoryView(store: ClipboardStore.shared) {
+                showingClipboard = false
+            }
+        } else {
+            listIndex
         }
     }
 
-    var body: some View {
+    private var listIndex: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Tools")
@@ -24,10 +32,8 @@ struct ToolListView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
 
-            // Search
             HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.tertiary)
+                Image(systemName: "magnifyingglass").foregroundStyle(.tertiary)
                 TextField("Search tools", text: $query)
                     .textFieldStyle(.plain)
             }
@@ -44,8 +50,12 @@ struct ToolListView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(filtered, id: \.name) { tool in
-                            ToolRow(tool: tool)
+                        ForEach(filtered, id: \.id) { tool in
+                            PanelToolRow(tool: tool, tick: toggleTick) {
+                                handleTap(tool)
+                            } onToggled: {
+                                toggleTick += 1
+                            }
                         }
                     }
                 }
@@ -53,61 +63,91 @@ struct ToolListView: View {
         }
     }
 
+    private func handleTap(_ tool: PanelTool) {
+        ButtonSound.shared.play()
+        if let toggle = tool as? any TogglePanelTool {
+            toggle.toggle()
+            toggleTick += 1
+        } else if tool is ClipboardHistoryTool {
+            showingClipboard = true
+        }
+    }
+
     private var emptyState: some View {
         VStack(spacing: 8) {
             Spacer()
-            Image(systemName: "wrench.and.screwdriver")
-                .font(.system(size: 28, weight: .light))
-                .foregroundStyle(.tertiary)
-            Text("No tools found")
-                .font(.headline)
-            Text("Try a different search term.")
-                .font(.callout)
+            Text("No tools found.")
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
             Spacer()
         }
         .frame(maxWidth: .infinity)
     }
 }
 
-struct ToolRow: View {
-    let tool: AgentTool
+/// One row: icon, name, description; a pill toggle for toggle tools,
+/// a chevron for drilldown tools (matches tama-agent's ToolRowView).
+struct PanelToolRow: View {
+    let tool: PanelTool
+    let tick: Int
+    var onTap: () -> Void
+    var onToggled: () -> Void
+
+    @State private var isHovered = false
+
+    private var toggleTool: (any TogglePanelTool)? { tool as? any TogglePanelTool }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol(for: tool.name))
-                .font(.system(size: 16))
-                .foregroundStyle(.secondary)
-                .frame(width: 28)
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                Image(systemName: tool.icon)
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(tool.name)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.primary)
-                Text(tool.description)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(2)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(tool.name)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.primary)
+                    Text(tool.toolDescription)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                if let toggle = toggleTool {
+                    // tick forces re-evaluation after external state changes
+                    let _ = tick
+                    Toggle("", isOn: Binding(
+                        get: { toggle.isEnabled },
+                        set: { _ in
+                            ButtonSound.shared.play()
+                            toggle.toggle()
+                            onToggled()
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                } else if let hint = tool.shortcutHint {
+                    Text(hint)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
             }
-
-            Spacer()
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(height: 52)
+            .background(isHovered ? Color.white.opacity(0.06) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-    }
-
-    private func symbol(for name: String) -> String {
-        switch name {
-        case "bash": return "terminal"
-        case "read": return "doc.text"
-        case "write": return "square.and.pencil"
-        case "edit": return "pencil.line"
-        case "create_reminder", "create_routine": return "bell"
-        case "list_schedules": return "clock"
-        case "delete_schedule": return "trash"
-        default: return "wrench.and.screwdriver"
-        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel("\(tool.name). \(tool.toolDescription)")
     }
 }
