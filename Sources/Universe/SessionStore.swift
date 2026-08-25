@@ -19,6 +19,7 @@ struct Session: Codable, Identifiable {
 
 @MainActor
 final class SessionStore: ObservableObject {
+    static let shared = SessionStore()
     @Published private(set) var sessions: [Session] = []
 
     private let directory: URL = {
@@ -43,5 +44,14 @@ final class SessionStore: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(session) else { return }
         try? data.write(to: directory.appendingPathComponent("\(session.id.uuidString).json"), options: .atomic)
+    }
+
+    func loadSession(_ id: UUID) {
+        // This is handled by ChatState.loadSession
+    }
+
+    func deleteSession(_ id: UUID) {
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(id.uuidString).json"))
+        sessions.removeAll { $0.id == id }
     }
 }

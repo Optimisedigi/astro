@@ -43,6 +43,14 @@ extension RenderStates {
                 SkillListView(store: SkillStore.shared)
                     .background(Color(nsColor: .windowBackgroundColor))
             },
+            State("sessions-empty", size: CGSize(width: 420, height: 400)) {
+                SessionListView(store: SessionStore.shared, onSelectSession: { _ in }, onDeleteSession: { _ in })
+                    .background(Color(nsColor: .windowBackgroundColor))
+            },
+            State("tools-list", size: CGSize(width: 420, height: 400)) {
+                ToolListView(tools: ToolRegistry.shared.tools)
+                    .background(Color(nsColor: .windowBackgroundColor))
+            },
         ]
     }
 }

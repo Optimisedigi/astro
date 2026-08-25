@@ -147,9 +147,11 @@ struct ChatView: View {
 
     private let tabs = [
         AnimatedTabBar.Tab(id: "chat", label: "Chat", symbol: "bubble.left"),
+        AnimatedTabBar.Tab(id: "sessions", label: "Sessions", symbol: "clock.arrow.circlepath"),
         AnimatedTabBar.Tab(id: "tasks", label: "Tasks", symbol: "checklist"),
         AnimatedTabBar.Tab(id: "routines", label: "Routines", symbol: "clock"),
         AnimatedTabBar.Tab(id: "skills", label: "Skills", symbol: "wand.and.stars"),
+        AnimatedTabBar.Tab(id: "tools", label: "Tools", symbol: "wrench.and.screwdriver"),
     ]
 
     var body: some View {
@@ -167,11 +169,21 @@ struct ChatView: View {
                 chatBody
                 inputBar
             case 1:
-                TaskListView(store: taskStore)
+                SessionListView(store: state.store) { session in
+                    // Load session into chat
+                    state.store.loadSession(session.id)
+                    selectedTab = 0
+                } onDeleteSession: { session in
+                    state.store.deleteSession(session.id)
+                }
             case 2:
-                RoutineListView(store: schedules)
+                TaskListView(store: taskStore)
             case 3:
+                RoutineListView(store: schedules)
+            case 4:
                 SkillListView(store: skillStore)
+            case 5:
+                ToolListView(tools: ToolRegistry.shared.tools)
             default:
                 chatBody
                 inputBar
