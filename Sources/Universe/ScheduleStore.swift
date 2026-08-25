@@ -102,7 +102,13 @@ final class ScheduleStore: ObservableObject {
     private func deliver(_ job: Job) {
         switch job.kind {
         case .reminder:
-            notify(title: "⏰ \(job.name)", body: job.message)
+            // Notch toast like Tama, with the system notification as the fallback
+            // for unbundled runs (selftest/CLI has no UI session).
+            if Bundle.main.bundleIdentifier != nil {
+                NotchNotificationPresenter.showReminder(name: job.name, message: job.message)
+            } else {
+                notify(title: "⏰ \(job.name)", body: job.message)
+            }
         case .routine:
             Task { await runRoutine(job) }
         }
@@ -122,9 +128,17 @@ final class ScheduleStore: ObservableObject {
             try await loop.run(apiMessages: apiMessages, streamProvider: ClaudeService.shared.streamEvents) { delta in
                 result += delta
             } onToolActivity: { _ in }
-            notify(title: "🔁 \(job.name)", body: String(result.prefix(200)))
+            if Bundle.main.bundleIdentifier != nil {
+                NotchNotificationPresenter.showRoutineResult(name: job.name, result: String(result.prefix(200)))
+            } else {
+                notify(title: "🔁 \(job.name)", body: String(result.prefix(200)))
+            }
         } catch {
-            notify(title: "🔁 \(job.name)", body: "Routine failed: \(error.localizedDescription)")
+            if Bundle.main.bundleIdentifier != nil {
+                NotchNotificationPresenter.showRoutineResult(name: job.name, result: "Routine failed: \(error.localizedDescription)")
+            } else {
+                notify(title: "🔁 \(job.name)", body: "Routine failed: \(error.localizedDescription)")
+            }
         }
     }
 

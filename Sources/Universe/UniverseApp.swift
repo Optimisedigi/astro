@@ -39,6 +39,11 @@ struct MenuBarIconView: View {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        VirtualNotch.hide()
+        ClipboardMonitor.shared.stop()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--selftest") {
             Task {
@@ -64,6 +69,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeyManager.shared.register()
         ScheduleStore.shared.start()
         ClipboardMonitor.shared.start()
+
+        /* Draw a virtual notch so screen recordings (which don't capture the
+           hardware notch) still show the silhouette behind notch toasts. */
+        VirtualNotch.show()
 
         /* Without a Dock icon or a launch window, double-clicking the app looks like
            nothing happened. Show the panel so launching has a visible result — except

@@ -45,6 +45,8 @@ final class PanelController {
         panel = FloatingPanel(contentRect: rect, contentView: hostingView)
     }
 
+    var isVisible: Bool { panel.isVisible }
+
     /// Open the panel on a specific settings sheet, for the menubar menu.
     func openSheet(_ kind: SettingsSheetKind) {
         show()

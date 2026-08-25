@@ -137,6 +137,9 @@ enum SelfTest {
         // 10. Mood menubar icon
         await runMoodIconChecks(check: check)
 
+        // 11. Notch notifications
+        await runNotchChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
     }
@@ -190,6 +193,36 @@ enum SelfTest {
         // Restore original state
         for list in taskStore.taskLists { taskStore.delete(id: list.id) }
         for list in originalLists { taskStore.save(list) }
+    }
+
+    @MainActor
+    static func runNotchChecks(check: (Bool, String) -> Void) async {
+        // The notch path is pure geometry: closed, non-empty, flush with the top edge.
+        let rect = CGRect(x: 0, y: 0, width: 200, height: 32)
+        let path = NotchShapePath.path(in: rect)
+        check(!path.isEmpty, "notch: path draws")
+        check(path.boundingBox.minY == 0, "notch: flat top is flush with y=0")
+        check(abs(path.boundingBox.width - rect.width) < 0.5, "notch: path spans the full width")
+
+        // Larger radii still produce a valid closed path (animation endpoints).
+        let expanded = NotchShapePath.path(in: CGRect(x: 0, y: 0, width: 380, height: 100),
+                                           topCornerRadius: 14, bottomCornerRadius: 20)
+        check(!expanded.isEmpty && expanded.boundingBox.height == 100, "notch: expanded path valid")
+
+        // Screen extension must return a sane fallback on any display.
+        if let screen = NSScreen.main {
+            let size = screen.notchSize
+            check(size.width > 0 && size.height > 0, "notch: notchSize positive on this display")
+            check(screen.notchFrame.midX == screen.frame.midX, "notch: frame is centered")
+        }
+
+        // Overlay tracker: active on first show, inactive only after debounce.
+        NotchOverlayTracker.overlayDidShow()
+        check(NotchOverlayTracker.isActive, "notch: tracker active while overlay shown")
+        NotchOverlayTracker.overlayDidHide()
+        check(NotchOverlayTracker.isActive, "notch: tracker debounces before going inactive")
+        try? await Task.sleep(for: .milliseconds(600))
+        check(!NotchOverlayTracker.isActive, "notch: tracker inactive after debounce")
     }
 
     @MainActor

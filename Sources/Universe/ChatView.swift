@@ -133,6 +133,13 @@ final class ChatState: ObservableObject {
                     self?.apply(activity)
                 }
                 queue.finish() // flush before anything reads the final text
+                // Panel dismissed mid-turn: surface the reply as a notch toast (Tama behavior).
+                if !PanelController.shared.isVisible {
+                    let reply = session.messages.last?.text ?? ""
+                    NotchNotificationPresenter.showAgentReply(message: String(reply.prefix(300))) {
+                        PanelController.shared.show()
+                    }
+                }
                 // Brief happy beat, then settle back to idle (matches tama-agent).
                 MascotController.shared.setState(.happy)
                 Task {
