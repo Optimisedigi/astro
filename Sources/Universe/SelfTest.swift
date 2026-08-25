@@ -106,8 +106,70 @@ enum SelfTest {
         // 3. Schedule parsing + schedule tools
         await runScheduleChecks(check: check)
 
+        // 4. Markdown scanner
+        runMarkdownChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
+    }
+
+    static func runMarkdownChecks(check: (Bool, String) -> Void) {
+        func kinds(_ source: String) -> [String] {
+            Markdown.parse(source).map { block in
+                switch block {
+                case .paragraph: return "paragraph"
+                case .heading: return "heading"
+                case .bullet: return "bullet"
+                case .numbered: return "numbered"
+                case .checklist: return "checklist"
+                case .quote: return "quote"
+                case .code: return "code"
+                case .table: return "table"
+                case .rule: return "rule"
+                }
+            }
+        }
+
+        check(kinds("# Title\n\nHello **world**.") == ["heading", "paragraph"], "markdown: heading + paragraph")
+        check(kinds("- one\n- two") == ["bullet"], "markdown: bullet list")
+        check(kinds("1. one\n2. two") == ["numbered"], "markdown: numbered list")
+        check(kinds("- [ ] todo\n- [x] done") == ["checklist"], "markdown: checklist")
+        check(kinds("> quoted") == ["quote"], "markdown: block quote")
+        check(kinds("---") == ["rule"], "markdown: horizontal rule")
+
+        if case .code(let language, let text)? = Markdown.parse("```swift\nlet x = 1\n```").first {
+            check(language == "swift" && text == "let x = 1", "markdown: fenced code keeps language and body")
+        } else {
+            check(false, "markdown: fenced code keeps language and body")
+        }
+
+        // A response mid-stream has an unterminated fence; it must still render as code.
+        if case .code(_, let text)? = Markdown.parse("```\nhalf written").first {
+            check(text == "half written", "markdown: unterminated fence streams as code")
+        } else {
+            check(false, "markdown: unterminated fence streams as code")
+        }
+
+        // Text inside a fence must never be re-parsed as markdown.
+        check(kinds("```\n# not a heading\n- not a list\n```") == ["code"], "markdown: fence content is not parsed")
+
+        if case .table(let header, let rows)? = Markdown.parse("| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |").first {
+            check(header.count == 2 && rows.count == 2 && String(rows[1][1].characters) == "4",
+                  "markdown: table header and rows")
+        } else {
+            check(false, "markdown: table header and rows")
+        }
+
+        if case .checklist(let items)? = Markdown.parse("- [x] shipped\n- [ ] pending").first {
+            check(items.count == 2 && items[0].done && !items[1].done, "markdown: checkbox state")
+        } else {
+            check(false, "markdown: checkbox state")
+        }
+
+        // Inline spans survive, and a stray marker does not blow up the parse.
+        check(String(Markdown.inline("**bold** and `code`").characters) == "bold and code", "markdown: inline spans stripped to text")
+        check(!String(Markdown.inline("unclosed **bold").characters).isEmpty, "markdown: unclosed span does not crash")
+        check(kinds("") == [], "markdown: empty input yields no blocks")
     }
 
     // Schedule parsing + store checks run before UI exists, so they can use ScheduleStore safely.
