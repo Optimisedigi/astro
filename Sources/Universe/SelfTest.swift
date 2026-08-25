@@ -124,8 +124,66 @@ enum SelfTest {
         // 6. Models, permissions and speech settings
         await runSettingsChecks(check: check)
 
+        // 7. Onboarding flag logic
+        runOnboardingChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
+    }
+
+    @MainActor
+    static func runOnboardingChecks(check: (Bool, String) -> Void) {
+        // Save and restore the real flag so the selftest doesn't clobber the user's state.
+        let saved = UserDefaults.standard.bool(forKey: OnboardingModel.defaultsKey)
+
+        OnboardingModel.reset()
+        check(!UserDefaults.standard.bool(forKey: OnboardingModel.defaultsKey),
+              "onboarding: reset clears the flag")
+
+        let model = OnboardingModel(fixed: [
+            .accessibility: .granted, .fullDisk: .granted, .microphone: .granted,
+            .speech: .granted, .appManagement: .granted, .screenRecording: .granted,
+            .notifications: .granted, .browser: .ready("Safari detected."),
+        ])
+        check(model.outstanding.isEmpty, "onboarding: all granted → no outstanding steps")
+        check(model.isComplete, "onboarding: all granted → auto-completes")
+        check(UserDefaults.standard.bool(forKey: OnboardingModel.defaultsKey),
+              "onboarding: complete() persists the flag")
+
+        OnboardingModel.reset()
+        let mixed = OnboardingModel(fixed: [
+            .accessibility: .denied, .fullDisk: .denied, .microphone: .granted,
+            .speech: .granted, .appManagement: .denied, .screenRecording: .granted,
+            .notifications: .granted, .browser: .ready("Safari detected."),
+        ])
+        check(mixed.outstanding.count == 2, "onboarding: 2 unsatisfied required permissions")
+        check(mixed.outstanding.allSatisfy { !$0.optional }, "onboarding: outstanding are required only")
+        check(mixed.currentPermission?.kind == .accessibility, "onboarding: starts at first outstanding")
+        check(!mixed.isLastStep, "onboarding: not last step with 3 outstanding")
+
+        mixed.advance()
+        check(mixed.currentPermission?.kind == .fullDisk, "onboarding: advances to next outstanding")
+        mixed.advance()
+        check(mixed.isLastStep, "onboarding: last step after advancing past all but one")
+        mixed.complete()
+        check(mixed.isComplete, "onboarding: complete() marks as done")
+        check(UserDefaults.standard.bool(forKey: OnboardingModel.defaultsKey),
+              "onboarding: complete() persists the flag")
+
+        // Optional-only outstanding: skip is allowed.
+        OnboardingModel.reset()
+        let optionalOnly = OnboardingModel(fixed: [
+            .accessibility: .granted, .fullDisk: .granted, .microphone: .granted,
+            .speech: .granted, .appManagement: .denied, .screenRecording: .granted,
+            .notifications: .granted, .browser: .denied,
+        ])
+        check(optionalOnly.outstanding.isEmpty, "onboarding: optional-only → no required outstanding")
+        check(optionalOnly.isComplete, "onboarding: optional-only → auto-completes")
+        optionalOnly.skipCurrent()
+        check(optionalOnly.isComplete, "onboarding: skip on optional completes")
+
+        // Restore the user's real flag.
+        UserDefaults.standard.set(saved, forKey: OnboardingModel.defaultsKey)
     }
 
     @MainActor

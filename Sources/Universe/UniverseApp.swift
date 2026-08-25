@@ -57,6 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            when macOS started us at login, where a panel appearing would be a jump scare. */
         if !launchedAsLoginItem {
             PanelController.shared.show()
+            // First launch: walk through permissions before the user can ask anything.
+            if !OnboardingModel().hasCompletedOnboarding {
+                PanelController.shared.openSheet(.onboarding)
+            }
         }
     }
 

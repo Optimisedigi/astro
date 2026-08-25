@@ -175,6 +175,8 @@ struct ChatView: View {
                 VoiceSettingsView(state: state) { sheet = nil }
             case .permissions:
                 PermissionsView(checker: state.permissions) { sheet = nil }
+            case .onboarding:
+                OnboardingView(model: OnboardingModel()) { sheet = nil }
             }
         }
     }
