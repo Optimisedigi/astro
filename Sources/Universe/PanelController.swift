@@ -29,7 +29,7 @@ final class PanelController {
     static let shared = PanelController()
 
     private let panel: FloatingPanel
-    private let chatState = ChatState()
+    let chatState = ChatState()
 
     private init() {
         let width: CGFloat = 420
@@ -43,6 +43,12 @@ final class PanelController {
         )
         let hostingView = NSHostingView(rootView: ChatView(state: chatState))
         panel = FloatingPanel(contentRect: rect, contentView: hostingView)
+    }
+
+    /// Open the panel on a specific settings sheet, for the menubar menu.
+    func openSheet(_ kind: SettingsSheetKind) {
+        show()
+        chatState.requestedSheet = kind
     }
 
     /// Bring the panel up (idempotent) — used on launch and on reopen.

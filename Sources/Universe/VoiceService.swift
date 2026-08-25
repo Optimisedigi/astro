@@ -138,24 +138,77 @@ final class VoiceService: NSObject, ObservableObject {
     }
 }
 
-/// Voice output. AVSpeechSynthesizer now; Kokoro-82M (MLX) drops in here later (SPEC.md §6).
+/// Voice output. AVSpeechSynthesizer with the system's installed voices.
+/// Kokoro-82M (MLX) would drop in behind this same interface (SPEC.md §6); the
+/// voice list and speed slider are already shaped for it.
 @MainActor
 final class SpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     @Published var isSpeaking = false
+
+    /// Persisted so the chosen voice and speed survive a relaunch.
+    @Published var voiceIdentifier: String? {
+        didSet { UserDefaults.standard.set(voiceIdentifier, forKey: Self.voiceKey) }
+    }
+
+    /// 0.5x–2x, shown to the user as a multiplier of normal speed.
+    @Published var speed: Double {
+        didSet { UserDefaults.standard.set(speed, forKey: Self.speedKey) }
+    }
+
+    private static let voiceKey = "universe.voiceIdentifier"
+    private static let speedKey = "universe.speechSpeed"
     private let synthesizer = AVSpeechSynthesizer()
 
     override init() {
+        let stored = UserDefaults.standard.double(forKey: Self.speedKey)
+        speed = (0.5...2.0).contains(stored) ? stored : 1.0
+        voiceIdentifier = UserDefaults.standard.string(forKey: Self.voiceKey)
         super.init()
         synthesizer.delegate = self
     }
 
+    /// English voices only — the assistant speaks English, and the full macOS list
+    /// runs to hundreds of entries.
+    static var availableVoices: [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.hasPrefix("en") }
+            .sorted { ($0.quality.rawValue, $0.name) > ($1.quality.rawValue, $1.name) }
+    }
+
+    var currentVoice: AVSpeechSynthesisVoice? {
+        voiceIdentifier.flatMap(AVSpeechSynthesisVoice.init(identifier:))
+            ?? AVSpeechSynthesisVoice(language: "en-US")
+    }
+
     func speak(_ text: String) {
         stop()
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.voice = currentVoice
+        utterance.rate = Self.rate(for: speed)
         synthesizer.speak(utterance)
         isSpeaking = true
+    }
+
+    /// Speaks one line in a given voice, for the preview button in Voice Settings.
+    func preview(voiceIdentifier: String) {
+        stop()
+        let utterance = AVSpeechUtterance(string: "Hey, this is how I sound.")
+        utterance.voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier)
+        utterance.rate = Self.rate(for: speed)
+        synthesizer.speak(utterance)
+        isSpeaking = true
+    }
+
+    /// Maps a 0.5x–2x multiplier onto AVSpeechUtterance's own rate scale, which is
+    /// not linear around its default.
+    static func rate(for speed: Double) -> Float {
+        let clamped = min(max(speed, 0.5), 2.0)
+        let base = Double(AVSpeechUtteranceDefaultSpeechRate)
+        let value = clamped >= 1
+            ? base + (Double(AVSpeechUtteranceMaximumSpeechRate) - base) * (clamped - 1)
+            : Double(AVSpeechUtteranceMinimumSpeechRate) + (base - Double(AVSpeechUtteranceMinimumSpeechRate)) * ((clamped - 0.5) / 0.5)
+        return Float(min(max(value, Double(AVSpeechUtteranceMinimumSpeechRate)), Double(AVSpeechUtteranceMaximumSpeechRate)))
     }
 
     func stop() {

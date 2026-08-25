@@ -1,3 +1,4 @@
+import AVFoundation
 import CryptoKit
 import Foundation
 
@@ -120,8 +121,62 @@ enum SelfTest {
         // 5. OAuth sign-in (pure logic only — no network)
         await runOAuthChecks(check: check)
 
+        // 6. Models, permissions and speech settings
+        await runSettingsChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
+    }
+
+    @MainActor
+    static func runSettingsChecks(check: (Bool, String) -> Void) async {
+        // Model catalog
+        let ids = ModelRegistry.models.map(\.id)
+        check(Set(ids).count == ids.count, "models: no duplicate ids")
+        check(ModelRegistry.models.allSatisfy { $0.contextWindow > 0 && $0.maxOutputTokens > 0 },
+              "models: every model declares real limits")
+        check(ModelRegistry.selectableModels.allSatisfy { $0.provider.isImplemented },
+              "models: only reachable providers are selectable")
+        check(!ModelRegistry.selectableModels.isEmpty, "models: at least one selectable model")
+        check(ModelRegistry.models(for: .anthropic).contains { $0.id == "claude-sonnet-5" },
+              "models: new Sonnet 5 present")
+        check(ModelRegistry.models(for: .gemini).contains { $0.id == "gemini-3-pro-preview" },
+              "models: new Gemini 3 Pro present")
+        check(AIProvider.allCases.filter(\.isImplemented) == [.anthropic],
+              "models: only Anthropic claims a working sign-in")
+
+        let registry = ModelRegistry.shared
+        let original = registry.selectedModelID
+        check(ModelRegistry.selectableModels.contains { $0.id == original }, "models: default selection is reachable")
+        registry.selectedModelID = "claude-haiku-4-5-20251001"
+        check(registry.selectedModel.name == "Claude Haiku 4.5", "models: selection resolves to the right model")
+        registry.selectedModelID = original
+
+        // Permissions: every row must map to a real Settings pane and describe itself.
+        let checker = PermissionsChecker()
+        await checker.refresh()
+        check(checker.permissions.count == PermissionsChecker.Kind.allCases.count, "permissions: every kind has a row")
+        check(checker.permissions.allSatisfy { !$0.title.isEmpty && !$0.reason.isEmpty },
+              "permissions: every row explains itself")
+        check(PermissionsChecker.Kind.allCases.allSatisfy { URL(string: PermissionsChecker.settingsURL(for: $0)) != nil },
+              "permissions: every kind deep-links somewhere valid")
+        check(PermissionsChecker.settingsURL(for: .accessibility).hasSuffix("Privacy_Accessibility"),
+              "permissions: accessibility pane link")
+        check(PermissionsChecker.settingsURL(for: .fullDisk).hasSuffix("Privacy_AllFiles"),
+              "permissions: full disk pane link")
+        check(PermissionsChecker.Status.granted.isSatisfied && PermissionsChecker.Status.ready("x").isSatisfied,
+              "permissions: granted and ready count as satisfied")
+        check(!PermissionsChecker.Status.denied.isSatisfied && !PermissionsChecker.Status.unknown.isSatisfied,
+              "permissions: denied and unknown are never claimed as granted")
+        check(checker.outstanding.allSatisfy { !$0.optional }, "permissions: optional rows never block onboarding")
+
+        // Speech rate mapping drives the speed slider.
+        check(SpeechService.rate(for: 1.0) == AVSpeechUtteranceDefaultSpeechRate, "speech: 1x is the system default rate")
+        check(SpeechService.rate(for: 2.0) > SpeechService.rate(for: 1.0), "speech: faster is faster")
+        check(SpeechService.rate(for: 0.5) < SpeechService.rate(for: 1.0), "speech: slower is slower")
+        check(SpeechService.rate(for: 9) <= AVSpeechUtteranceMaximumSpeechRate, "speech: out-of-range speed is clamped high")
+        check(SpeechService.rate(for: -1) >= AVSpeechUtteranceMinimumSpeechRate, "speech: out-of-range speed is clamped low")
+        check(SpeechService.availableVoices.allSatisfy { $0.language.hasPrefix("en") }, "speech: voice list is English only")
     }
 
     static func runOAuthChecks(check: (Bool, String) -> Void) async {

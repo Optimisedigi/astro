@@ -12,7 +12,11 @@ final class ChatState: ObservableObject {
     /// Smooths lumpy token bursts into steady typing.
     private let queue = CharacterQueue()
     let voice = VoiceService()
-    let speech = SpeechService()
+    @Published var speech = SpeechService()
+    let permissions = PermissionsChecker()
+    let login = LoginModel()
+    /// Set by the menubar menu to open one of the settings sheets.
+    @Published var requestedSheet: SettingsSheetKind?
     @Published var voiceMode = false
 
     /// No Claude session and no API key: the user cannot ask anything yet.
@@ -134,10 +138,20 @@ final class ChatState: ObservableObject {
 struct ChatView: View {
     @ObservedObject var state: ChatState
     @ObservedObject private var schedules = ScheduleStore.shared
+    @ObservedObject private var registry = ModelRegistry.shared
     @State private var showSchedules = false
+    @State private var sheet: SettingsSheetKind?
 
     var body: some View {
         VStack(spacing: 0) {
+            TopBar(
+                title: showSchedules ? "Reminders & routines" : registry.selectedModel.name,
+                hasSchedules: !schedules.jobs.isEmpty,
+                showingSchedules: showSchedules,
+                toggleSchedules: { showSchedules.toggle() },
+                openSheet: { sheet = $0 }
+            )
+            Divider()
             if showSchedules {
                 ScheduleListView(store: schedules)
             } else {
@@ -148,6 +162,21 @@ struct ChatView: View {
         .frame(width: 420, height: 560)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        .onChange(of: state.requestedSheet) { _, requested in
+            guard let requested else { return }
+            sheet = requested
+            state.requestedSheet = nil
+        }
+        .sheet(item: $sheet) { kind in
+            switch kind {
+            case .ai:
+                AISettingsView(registry: registry, login: state.login) { sheet = nil }
+            case .voice:
+                VoiceSettingsView(state: state) { sheet = nil }
+            case .permissions:
+                PermissionsView(checker: state.permissions) { sheet = nil }
+            }
+        }
     }
 
     private var chatBody: some View {
@@ -183,19 +212,6 @@ struct ChatView: View {
             }
             .buttonStyle(.plain)
             .help("Toggle voice mode")
-
-            Button(action: { showSchedules.toggle() }) {
-                Image(systemName: showSchedules ? "bell.fill" : "bell")
-                    .font(.title2)
-                    .foregroundStyle(showSchedules ? Color.accentColor : Color.primary)
-                    .overlay(alignment: .topTrailing) {
-                        if !schedules.jobs.isEmpty && !showSchedules {
-                            Circle().fill(Color.red).frame(width: 6, height: 6).offset(x: 2, y: -1)
-                        }
-                    }
-            }
-            .buttonStyle(.plain)
-            .help("Reminders & routines")
 
             TextField(state.voiceMode ? "Listening…" : "Type anything…", text: $state.input)
                 .textFieldStyle(.plain)

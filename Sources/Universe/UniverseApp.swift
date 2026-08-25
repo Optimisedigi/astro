@@ -10,7 +10,11 @@ struct UniverseApp: App {
                 PanelController.shared.toggle()
             }
             Divider()
-            Button("Settings…") {
+            Button("AI Settings…") { PanelController.shared.openSheet(.ai) }
+            Button("Voice Settings…") { PanelController.shared.openSheet(.voice) }
+            Button("Permissions…") { PanelController.shared.openSheet(.permissions) }
+            Divider()
+            Button("Advanced (API key)…") {
                 SettingsWindowController.shared.show()
             }
             Divider()

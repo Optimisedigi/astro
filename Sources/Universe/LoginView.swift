@@ -106,11 +106,28 @@ struct LoginView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var codeEntry: some View {
+    private var codeEntry: some View { LoginCodeEntry(model: model) }
+
+    private var signedInState: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("After you authorize, Claude shows a code. Paste it here.")
+            Text("Universe is using your Claude subscription.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            Button("Sign out", action: model.signOut)
+        }
+    }
+}
+
+/// Paste-the-code step, shared by the Settings window and the AI Settings sheet.
+struct LoginCodeEntry: View {
+    @ObservedObject var model: LoginModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("After you authorize, Claude shows a code. Paste it here.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
                 SecureField("code#state", text: $model.pastedCode)
@@ -122,11 +139,7 @@ struct LoginView: View {
             }
 
             if model.phase == .exchanging {
-                HStack(spacing: 6) {
-                    Text("Exchanging code…")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text("Exchanging code\u{2026}").font(.caption).foregroundStyle(.secondary)
             }
 
             if case .failed(let message) = model.phase {
@@ -136,15 +149,6 @@ struct LoginView: View {
             Button("Open the sign-in page again", action: model.openAuthorizePageAgain)
                 .buttonStyle(.link)
                 .font(.caption)
-        }
-    }
-
-    private var signedInState: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Universe is using your Claude subscription.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Button("Sign out", action: model.signOut)
         }
     }
 }

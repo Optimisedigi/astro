@@ -6,7 +6,10 @@ actor ClaudeService {
     static let shared = ClaudeService()
 
     private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
-    private let model = "claude-haiku-4-5-20251001"
+    /// Read per-request so switching model in AI Settings takes effect immediately.
+    private var selectedModel: String {
+        get async { await MainActor.run { ModelRegistry.shared.selectedModelID } }
+    }
 
     /* Subscription (OAuth) tokens are issued to the Claude Code client, and Anthropic
        rejects inference on them unless the request presents that identity: the first
@@ -73,7 +76,7 @@ actor ClaudeService {
                     systemBlocks.append(["type": "text", "text": Self.systemPrompt])
 
                     var body: [String: Any] = [
-                        "model": model,
+                        "model": await selectedModel,
                         "max_tokens": 4096,
                         "stream": true,
                         "system": systemBlocks,

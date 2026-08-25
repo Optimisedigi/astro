@@ -20,7 +20,7 @@ enum RenderStates {
     }
 
     /// Every UI state we assert on. Phases append their own list here.
-    static var all: [State] { phase1States + phase2States }
+    static var all: [State] { phase1States + phase2States + phase3States }
 
     static func run(directory: String) -> Bool {
         let dir = URL(fileURLWithPath: directory, isDirectory: true)
