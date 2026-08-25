@@ -57,3 +57,15 @@ Data lives in `~/Library/Application Support/Universe/`.
 - Tools are contained to a workspace directory; symlink and path-escape attempts are
   rejected and covered by tests.
 - `--selftest` runs the agent loop against a scripted model, so it needs no network.
+
+## Install
+
+```bash
+./install.sh
+```
+
+Builds Release, runs the self-test, and installs to `/Applications/Universe.app`.
+Ad-hoc signed, so it runs on the machine that built it; shipping to other Macs
+would need a Developer ID certificate and notarization.
+
+Then: menubar icon → Settings → **Sign in with Claude**. Global hotkey is ⌥Space.
