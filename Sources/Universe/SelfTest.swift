@@ -2,7 +2,7 @@ import Foundation
 
 /// Offline proof that the agent loop executes tools end-to-end (no API key needed).
 /// A scripted fake model requests write → read → bash; the real tools run on disk.
-/// Run: `TamaClone --selftest`
+/// Run: `Universe --selftest`
 enum SelfTest {
     @MainActor
     static func run() async -> Bool {
@@ -13,7 +13,7 @@ enum SelfTest {
         }
 
         let workspace = FileManager.default.temporaryDirectory
-            .appendingPathComponent("tamaclone-selftest-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("universe-selftest-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: workspace) }
 

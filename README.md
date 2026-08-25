@@ -21,15 +21,15 @@ full reverse-engineering notes that informed the architecture.
 ## Run it
 
 ```sh
-swift build && .build/debug/TamaClone --selftest   # 30 checks, no API key needed
+swift build && .build/debug/Universe --selftest   # 30 checks, no API key needed
 ```
 
 For the real app (the global hotkey needs a signed bundle):
 
 ```sh
 xcodegen generate
-xcodebuild -project TamaClone.xcodeproj -scheme TamaClone -configuration Debug build
-open ~/Library/Developer/Xcode/DerivedData/TamaClone-*/Build/Products/Debug/TamaClone.app
+xcodebuild -project Universe.xcodeproj -scheme Universe -configuration Debug build
+open ~/Library/Developer/Xcode/DerivedData/Universe-*/Build/Products/Debug/Universe.app
 ```
 
 Add your Anthropic API key via the menubar → Settings. It is stored in the Keychain.
@@ -37,8 +37,8 @@ Add your Anthropic API key via the menubar → Settings. It is stored in the Key
 ## Layout
 
 ```
-Sources/TamaClone/
-  TamaCloneApp.swift    app entry, menubar, startup wiring
+Sources/Universe/
+  UniverseApp.swift    app entry, menubar, startup wiring
   PanelController.swift borderless floating panel
   HotKeyManager.swift   Carbon global hotkey
   ClaudeService.swift   streaming SSE client with tool-use parsing
@@ -50,7 +50,7 @@ Sources/TamaClone/
   SelfTest.swift        offline verification of the whole loop
 ```
 
-Data lives in `~/Library/Application Support/TamaClone/`.
+Data lives in `~/Library/Application Support/Universe/`.
 
 ## Notes
 

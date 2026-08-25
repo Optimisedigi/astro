@@ -25,7 +25,7 @@ final class ScheduleStore: ObservableObject {
 
     private let storageURL: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("TamaClone", isDirectory: true)
+        let dir = base.appendingPathComponent("Universe", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("schedules.json")
     }()
@@ -117,7 +117,7 @@ final class ScheduleStore: ObservableObject {
         var result = ""
         do {
             let workspace = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("TamaClone/Workspace", isDirectory: true)
+                .appendingPathComponent("Universe/Workspace", isDirectory: true)
             let loop = AgentLoop(workspace: workspace)
             try await loop.run(apiMessages: apiMessages, streamProvider: ClaudeService.shared.streamEvents) { delta in
                 result += delta

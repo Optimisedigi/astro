@@ -3,7 +3,8 @@ import Security
 
 /// Minimal Keychain wrapper for the Anthropic API key (never UserDefaults for secrets).
 enum KeychainHelper {
-    private static let service = "com.tamaclone.apikeys"
+    private static let service = "com.universe.apikeys"
+    private static let legacyService = "com.tamaclone.apikeys"
 
     static func set(_ value: String, account: String) {
         let data = Data(value.utf8)
@@ -19,6 +20,17 @@ enum KeychainHelper {
     }
 
     static func get(account: String) -> String? {
+        if let value = read(service: service, account: account) { return value }
+        /* The app was renamed from TamaClone; carry an existing key over once so
+           the rename doesn't silently lose it. */
+        if let legacy = read(service: legacyService, account: account) {
+            set(legacy, account: account)
+            return legacy
+        }
+        return nil
+    }
+
+    private static func read(service: String, account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

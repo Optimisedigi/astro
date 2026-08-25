@@ -45,7 +45,7 @@ final class ChatState: ObservableObject {
 
     var workspace: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("TamaClone/Workspace", isDirectory: true)
+        let dir = base.appendingPathComponent("Universe/Workspace", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()

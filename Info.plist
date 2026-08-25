@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>TamaClone</string>
+	<string>Universe</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,8 +25,8 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>TamaClone needs microphone access for speech recognition when you hold ⌥Space to speak.</string>
+	<string>Universe needs microphone access for speech recognition when you hold ⌥Space to speak.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>TamaClone uses speech recognition to transcribe your voice commands.</string>
+	<string>Universe uses speech recognition to transcribe your voice commands.</string>
 </dict>
 </plist>

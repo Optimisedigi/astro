@@ -1,11 +1,11 @@
-name: TamaClone
+name: Universe
 options:
-  bundleIdPrefix: com.tamaclone
+  bundleIdPrefix: com.universe
   deploymentTarget:
     macOS: "15.0"
 settings:
   base:
-    PRODUCT_BUNDLE_IDENTIFIER: com.tamaclone.app
+    PRODUCT_BUNDLE_IDENTIFIER: com.universe.app
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: "-"
     DEVELOPMENT_TEAM: ""
@@ -13,11 +13,11 @@ settings:
     INFOPLIST_FILE: Info.plist
     SWIFT_VERSION: "5.0"
 targets:
-  TamaClone:
+  Universe:
     type: application
     platform: macOS
     sources:
-      - Sources/TamaClone
+      - Sources/Universe
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.tamaclone.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.universe.app
