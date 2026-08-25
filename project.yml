@@ -7,6 +7,15 @@ packages:
   RiveRuntime:
     url: https://github.com/rive-app/rive-ios
     from: "6.20.3"
+  kokoro-ios:
+    url: https://github.com/mlalma/kokoro-ios.git
+    from: "1.0.11"
+  mlx-swift:
+    url: https://github.com/ml-explore/mlx-swift
+    exactVersion: "0.30.2"
+  MLXUtilsLibrary:
+    url: https://github.com/mlalma/MLXUtilsLibrary.git
+    exactVersion: "0.0.6"
 settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.universe.app
@@ -30,6 +39,11 @@ targets:
         buildPhase: resources
     dependencies:
       - package: RiveRuntime
+      - package: kokoro-ios
+        product: KokoroSwift
+      - package: mlx-swift
+        product: MLX
+      - package: MLXUtilsLibrary
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.universe.app

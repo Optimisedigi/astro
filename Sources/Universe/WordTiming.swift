@@ -1,5 +1,7 @@
 import Foundation
-// import MLX // Kokoro TTS is a later phaseUtilsLibrary
+#if canImport(KokoroSwift)
+import MLXUtilsLibrary
+#endif
 
 /// Per-word timing information aligned to a single generated audio buffer.
 /// Produced by Kokoro's `duration_proj` (via `TimestampPredictor`) and used
@@ -22,6 +24,7 @@ struct WordTiming: Sendable {
     let endSec: Double
 }
 
+#if canImport(KokoroSwift)
 extension [MToken] {
     /// Convert a Kokoro `[MToken]` array into our domain `WordTiming`
     /// structs. Tokens without populated timestamps (typically whitespace-
@@ -34,3 +37,4 @@ extension [MToken] {
         }
     }
 }
+#endif

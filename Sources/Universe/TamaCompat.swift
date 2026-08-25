@@ -97,22 +97,15 @@ enum MarkdownRenderer {
     }
 }
 
-// MARK: - Kokoro MToken stub (real Kokoro is a later phase)
+// MARK: - Kokoro MToken stub (used only when KokoroSwift is not available)
 
+#if !canImport(KokoroSwift)
 struct MToken {
     let text: String
     let start_ts: Double?
     let end_ts: Double?
 }
-
-// MARK: - KokoroManager stub (real Kokoro is a later phase)
-
-@MainActor
-final class KokoroManager {
-    static let shared = KokoroManager()
-    private init() {}
-    func prewarm() { /* no-op until Kokoro TTS is wired */ }
-}
+#endif
 
 // MARK: - PermissionsChecker extensions
 
