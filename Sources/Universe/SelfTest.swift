@@ -127,8 +127,62 @@ enum SelfTest {
         // 7. Onboarding flag logic
         runOnboardingChecks(check: check)
 
+        // 8. Task and skill stores
+        runStoreChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
+    }
+
+    @MainActor
+    static func runStoreChecks(check: (Bool, String) -> Void) {
+        // Task store
+        let taskStore = TaskStore.shared
+        let originalLists = taskStore.taskLists
+
+        let list = taskStore.createList(title: "Selftest List")
+        check(taskStore.taskLists.contains { $0.id == list.id }, "tasks: createList persists")
+        check(taskStore.taskLists.first?.title == "Selftest List", "tasks: createList sets title")
+
+        taskStore.addItem(to: list.id, title: "Item 1")
+        taskStore.addItem(to: list.id, title: "Item 2")
+        let updated = taskStore.taskLists.first { $0.id == list.id }
+        check(updated?.items.count == 2, "tasks: addItem appends")
+        check(updated?.items.first?.title == "Item 1", "tasks: addItem sets title")
+
+        taskStore.toggleItem(listID: list.id, itemID: updated!.items[0].id)
+        let toggled = taskStore.taskLists.first { $0.id == list.id }
+        check(toggled?.items.first?.isCompleted == true, "tasks: toggleItem marks complete")
+        check(toggled?.completedCount == 1, "tasks: completedCount reflects toggle")
+
+        taskStore.deleteItem(listID: list.id, itemID: updated!.items[1].id)
+        let deleted = taskStore.taskLists.first { $0.id == list.id }
+        check(deleted?.items.count == 1, "tasks: deleteItem removes")
+
+        taskStore.delete(id: list.id)
+        check(!taskStore.taskLists.contains { $0.id == list.id }, "tasks: delete removes")
+
+        // Skill store
+        let skillStore = SkillStore.shared
+        let originalSkills = skillStore.skills
+
+        let skill = Skill(id: UUID(), name: "Selftest Skill", description: "A test skill",
+                          content: "Do the thing.", source: .global, createdAt: Date(), updatedAt: Date())
+        skillStore.save(skill)
+        check(skillStore.skills.contains { $0.name == "Selftest Skill" }, "skills: save persists")
+
+        let found = skillStore.skill(named: "Selftest Skill")
+        check(found?.content == "Do the thing.", "skills: skill(named:) finds by name")
+
+        let searched = skillStore.search("Selftest")
+        check(searched.count == 1, "skills: search finds by name")
+
+        skillStore.delete(id: skill.id)
+        check(!skillStore.skills.contains { $0.name == "Selftest Skill" }, "skills: delete removes")
+
+        // Restore original state
+        for list in taskStore.taskLists { taskStore.delete(id: list.id) }
+        for list in originalLists { taskStore.save(list) }
     }
 
     @MainActor

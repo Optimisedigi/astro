@@ -141,23 +141,48 @@ struct ChatView: View {
     @ObservedObject private var registry = ModelRegistry.shared
     @State private var showSchedules = false
     @State private var sheet: SettingsSheetKind?
+    @State private var selectedTab = 0
+    @ObservedObject private var taskStore = TaskStore.shared
+    @ObservedObject private var skillStore = SkillStore.shared
+
+    private let tabs = [
+        AnimatedTabBar.Tab(id: "chat", label: "Chat", symbol: "bubble.left"),
+        AnimatedTabBar.Tab(id: "tasks", label: "Tasks", symbol: "checklist"),
+        AnimatedTabBar.Tab(id: "routines", label: "Routines", symbol: "clock"),
+        AnimatedTabBar.Tab(id: "skills", label: "Skills", symbol: "wand.and.stars"),
+    ]
 
     var body: some View {
         VStack(spacing: 0) {
             TopBar(
-                title: showSchedules ? "Reminders & routines" : registry.selectedModel.name,
+                title: registry.selectedModel.name,
                 hasSchedules: !schedules.jobs.isEmpty,
-                showingSchedules: showSchedules,
-                toggleSchedules: { showSchedules.toggle() },
                 openSheet: { sheet = $0 }
             )
             Divider()
-            if showSchedules {
-                ScheduleListView(store: schedules)
-            } else {
+
+            // Tab content
+            switch selectedTab {
+            case 0:
                 chatBody
+                inputBar
+            case 1:
+                TaskListView(store: taskStore)
+            case 2:
+                RoutineListView(store: schedules)
+            case 3:
+                SkillListView(store: skillStore)
+            default:
+                chatBody
+                inputBar
             }
-            inputBar
+
+            Divider()
+
+            // Tab bar at the bottom
+            AnimatedTabBar(tabs: tabs, selectedIndex: $selectedTab)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
         }
         .frame(width: 420, height: 560)
         .background(.regularMaterial)
