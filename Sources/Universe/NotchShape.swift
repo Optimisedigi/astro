@@ -17,6 +17,13 @@ import AppKit
 /// └──────────────────────────┘
 /// ```
 enum NotchShapePath {
+    /// Default radius of the tight top corners.
+    ///
+    /// This is also how far the shape's straight left/right sides are inset from
+    /// its bounding box — anything that butts against the notch must overlap by
+    /// at least this much or a strip of wallpaper shows through the join.
+    static let defaultTopCornerRadius: CGFloat = 6
+
     /// Generate a `CGPath` for the notch shape.
     ///
     /// - Parameters:
@@ -26,7 +33,7 @@ enum NotchShapePath {
     /// - Returns: A closed `CGPath` representing the notch silhouette.
     static func path(
         in rect: CGRect,
-        topCornerRadius: CGFloat = 6,
+        topCornerRadius: CGFloat = NotchShapePath.defaultTopCornerRadius,
         bottomCornerRadius: CGFloat = 14
     ) -> CGPath {
         let path = CGMutablePath()

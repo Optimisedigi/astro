@@ -119,6 +119,9 @@ enum SelfTest {
         // 3b. Long-term memory + soul
         await runMemoryChecks(check: check)
 
+        // 3c. Single-instance arbitration
+        runSingleInstanceChecks(check: check)
+
         // 4. Markdown scanner
         runMarkdownChecks(check: check)
 
@@ -206,6 +209,29 @@ enum SelfTest {
         check(!path.isEmpty, "notch: path draws")
         check(path.boundingBox.minY == 0, "notch: flat top is flush with y=0")
         check(abs(path.boundingBox.width - rect.width) < 0.5, "notch: path spans the full width")
+
+        // Wings anchor to `notchSize`; the black box is drawn with `exactNotchSize`.
+        // If those two ever disagree by more than the deliberate tuck, every wing
+        // floats clear of the notch and the user sees a gap of wallpaper.
+        if let screen = NSScreen.main {
+            let anchor = screen.notchSize
+            let drawn = screen.exactNotchSize
+            check(anchor.width - drawn.width == NSScreen.notchTuck,
+                  "notch: wing anchor is exactly one tuck wider than the drawn notch")
+            check(anchor.height == drawn.height, "notch: wing anchor matches the drawn notch height")
+            // Wings tuck under, never leave a gap: their edge must be inside the box.
+            let anchorLeftX = screen.frame.midX - anchor.width / 2
+            let drawnLeftX = screen.frame.midX - drawn.width / 2
+            check(anchorLeftX <= drawnLeftX, "notch: wing edge sits under the notch, not clear of it")
+
+            // The gap users actually saw: the notch shape's straight side is inset
+            // from its bounding box by topCornerRadius, so a wing that stops at the
+            // bounding box leaves a strip of wallpaper down the whole join.
+            let notchSolidLeftX = drawnLeftX + NotchShapePath.defaultTopCornerRadius
+            let wingRightX = anchorLeftX + NotchCallButton.notchOverlapForTests
+            check(wingRightX >= notchSolidLeftX,
+                  "notch: wing reaches the notch's solid edge, leaving no seam")
+        }
 
         // The call wing butts into the notch cutout: its right edge must be a
         // straight full-height line, or wallpaper shows through the seam.
@@ -618,6 +644,41 @@ enum SelfTest {
         check(String(Markdown.inline("**bold** and `code`").characters) == "bold and code", "markdown: inline spans stripped to text")
         check(!String(Markdown.inline("unclosed **bold").characters).isEmpty, "markdown: unclosed span does not crash")
         check(kinds("") == [], "markdown: empty input yields no blocks")
+    }
+
+    /// Which copy wins when two builds of the same bundle ID race at launch.
+    /// A stale DerivedData build once swallowed every launch of a freshly
+    /// installed app, so the installed copy must always outrank a build folder.
+    static func runSingleInstanceChecks(check: (Bool, String) -> Void) {
+        let installed = URL(fileURLWithPath: "/Applications/Universe.app")
+        let derived = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Developer/Xcode/DerivedData/Universe-abc/Build/Products/Debug/Universe.app")
+
+        check(AppDelegate.isInstalledCopy(installed), "instance: /Applications copy is recognised as installed")
+        check(!AppDelegate.isInstalledCopy(derived), "instance: DerivedData build is not treated as installed")
+
+        // The regression: installed build must evict the stale one, not stand down.
+        check(!AppDelegate.shouldYield(selfIsInstalled: true, otherIsInstalled: false),
+              "instance: installed copy never yields to a build-folder copy")
+        check(AppDelegate.shouldYield(selfIsInstalled: false, otherIsInstalled: true),
+              "instance: build-folder copy yields to the installed one")
+        check(AppDelegate.shouldYield(selfIsInstalled: true, otherIsInstalled: true),
+              "instance: two installed copies keep first-one-wins")
+        check(AppDelegate.shouldYield(selfIsInstalled: false, otherIsInstalled: false),
+              "instance: two build-folder copies keep first-one-wins")
+
+        // Eviction must actually complete before launch continues, or the winner
+        // registers ⌥Space while the rival still holds it and the hotkey dies.
+        let started = Date()
+        AppDelegate.waitForExitForTests(of: [], timeout: 2)
+        check(Date().timeIntervalSince(started) < 0.2, "instance: no rivals means no waiting")
+
+        // Passing our own process must return at once and never force-quit us:
+        // reaching the kill path here would take the running app down with it.
+        let selfWait = Date()
+        AppDelegate.waitForExitForTests(of: [NSRunningApplication.current], timeout: 5)
+        check(Date().timeIntervalSince(selfWait) < 0.2,
+              "instance: eviction never waits on or kills the current process")
     }
 
     /// Long-term memory: facts, soul, budgets and prompt injection. Runs against

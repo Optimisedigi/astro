@@ -39,10 +39,22 @@ enum NotchCallButton {
     /// Top corner radius on the left side (matches notch curvature).
     private static let topCornerRadius: CGFloat = 6
 
-    /// How far the wing slides under the notch cutout. Butting the two edges up
-    /// exactly still leaves a hairline of wallpaper on fractional-scale displays,
-    /// so overlap slightly — the notch is opaque black and hides it.
-    private static let notchOverlap: CGFloat = 2
+    /// How far the wing slides under the notch cutout.
+    ///
+    /// The notch shape's straight left side is inset from its own bounding box by
+    /// `topCornerRadius` — only the very top edge reaches x=0. Meeting the boxes
+    /// edge-to-edge therefore left a visible strip of wallpaper down the join.
+    /// Overlap past that inset (plus a hair for subpixel rounding); both shapes
+    /// are opaque black, so the overlap itself is invisible.
+    ///
+    /// Three parts: half the tuck (the anchor sits that far left of the drawn
+    /// box), the notch's own corner inset, and 1pt of slack.
+    private static let notchOverlap: CGFloat =
+        NSScreen.notchTuck / 2 + NotchShapePath.defaultTopCornerRadius + 1
+
+    /// Exposed so the self-test can assert the wing actually reaches the notch's
+    /// solid edge rather than stopping at its bounding box.
+    static var notchOverlapForTests: CGFloat { notchOverlap }
 
     /// Bottom corner radius (matching notch aesthetic).
     private static let bottomCornerRadius: CGFloat = 10

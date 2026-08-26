@@ -101,16 +101,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             && event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
     }
 
-    /// Two copies of the same bundle ID can run from different paths (a build folder
-    /// and /Applications), which means two menubar icons and a hotkey that only reaches
-    /// one of them. Hand off to the copy that got here first and exit.
+    /// Two copies of the same bundle ID can run from different paths (a stale
+    /// DerivedData build and /Applications), which means two menubar icons and a
+    /// hotkey that only reaches one of them.
+    ///
+    /// The installed copy always wins. Handing off to whoever started first let a
+    /// day-old debug build silently swallow every launch of a freshly installed
+    /// app — the user saw stale UI and an ad-hoc signature no matter how many
+    /// times they reinstalled.
     private func claimSingleInstance() -> Bool {
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
             .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-        guard let existing = others.first else { return true }
-        existing.activate()
-        NSApp.terminate(nil)
-        return false
+        guard !others.isEmpty else { return true }
+
+        let selfIsInstalled = Self.isInstalledCopy(Bundle.main.bundleURL)
+        // Evict any running copy this one outranks, so the winner is alone.
+        var evicted: [NSRunningApplication] = []
+        for other in others {
+            let otherIsInstalled = other.bundleURL.map(Self.isInstalledCopy) ?? false
+            if Self.shouldYield(selfIsInstalled: selfIsInstalled, otherIsInstalled: otherIsInstalled) {
+                other.activate()
+                NSApp.terminate(nil)
+                return false
+            }
+            other.terminate()
+            evicted.append(other)
+        }
+        Self.waitForExit(of: evicted)
+        return true
+    }
+
+    /// Blocks until the evicted copies are really gone.
+    ///
+    /// `terminate()` only *requests* a quit. Continuing straight into launch means
+    /// registering the ⌥Space hotkey while the rival still holds it — registration
+    /// fails silently and is never retried, leaving the winner with a dead hotkey:
+    /// exactly the symptom evicting the rival was meant to cure.
+    nonisolated private static func waitForExit(of apps: [NSRunningApplication],
+                                                timeout: TimeInterval = 2) {
+        // Never wait on — or kill — ourselves. A self-reference here would turn a
+        // launch race into the app force-quitting itself.
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let rivals = apps.filter { $0.processIdentifier != ownPID }
+        guard !rivals.isEmpty else { return }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, rivals.contains(where: { !$0.isTerminated }) {
+            // Spin the runloop rather than sleeping: AppKit delivers the
+            // termination notifications that flip `isTerminated`.
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+        for app in rivals where !app.isTerminated {
+            NSLog("Universe: rival instance (pid \(app.processIdentifier)) ignored quit; forcing")
+            app.forceTerminate()
+        }
+    }
+
+    /// Test hook: exercises the eviction wait without launching a second copy.
+    nonisolated static func waitForExitForTests(of apps: [NSRunningApplication], timeout: TimeInterval) {
+        waitForExit(of: apps, timeout: timeout)
+    }
+
+    /// A copy living in /Applications is the one the user actually installed.
+    nonisolated static func isInstalledCopy(_ bundleURL: URL) -> Bool {
+        bundleURL.resolvingSymlinksInPath().path.hasPrefix("/Applications/")
+    }
+
+    /// Whether a starting instance should defer to an already-running one.
+    /// Only ever yield to a copy that is at least as authoritative as this one:
+    /// an installed build must never stand down for a build-folder build.
+    nonisolated static func shouldYield(selfIsInstalled: Bool, otherIsInstalled: Bool) -> Bool {
+        if selfIsInstalled == otherIsInstalled { return true } // identical rank: first one wins
+        return otherIsInstalled                               // only yield upward
     }
 
     /// The app was renamed from TamaClone; move existing sessions, schedules and
