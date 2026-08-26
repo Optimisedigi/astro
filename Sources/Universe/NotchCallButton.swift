@@ -36,6 +36,12 @@ enum NotchCallButton {
     /// with comfortable padding on the left where the bottom-corner flare lives.
     private static let wingWidth: CGFloat = 60
 
+    /// The panel is wider than the visible wing: the extra runs to the right,
+    /// tucking under the notch's bottom flare. Because `windowWidth` and
+    /// `notchOverlap` grow together, the left edge and the icon stay put.
+    private static let windowWidth: CGFloat =
+        wingWidth + NotchShapePath.defaultBottomCornerRadius
+
     /// Top corner radius on the left side (matches notch curvature).
     private static let topCornerRadius: CGFloat = 6
 
@@ -47,10 +53,16 @@ enum NotchCallButton {
     /// Overlap past that inset (plus a hair for subpixel rounding); both shapes
     /// are opaque black, so the overlap itself is invisible.
     ///
-    /// Three parts: half the tuck (the anchor sits that far left of the drawn
-    /// box), the notch's own corner inset, and 1pt of slack.
+    /// Four parts: half the tuck (the anchor sits that far left of the drawn
+    /// box), the notch's own corner inset, its bottom flare, and 1pt of slack.
+    ///
+    /// The bottom flare matters because the notch's bottom corners curve inward:
+    /// covering only the top inset left an uncovered wedge under that curve.
     private static let notchOverlap: CGFloat =
-        NSScreen.notchTuck / 2 + NotchShapePath.defaultTopCornerRadius + 1
+        NSScreen.notchTuck / 2
+            + NotchShapePath.defaultTopCornerRadius
+            + NotchShapePath.defaultBottomCornerRadius
+            + 1
 
     /// Exposed so the self-test can assert the wing actually reaches the notch's
     /// solid edge rather than stopping at its bounding box.
@@ -77,7 +89,6 @@ enum NotchCallButton {
 
         // Wing is exactly the same height as the notch.
         let wingHeight = notchSize.height
-        let windowWidth = wingWidth
         let windowHeight = wingHeight
 
         // Position: overlap into the notch so the wing blends seamlessly.
@@ -112,7 +123,7 @@ enum NotchCallButton {
         let shape = CAShapeLayer()
         shape.fillColor = NSColor.black.cgColor
 
-        let wingRect = CGRect(x: 0, y: 0, width: wingWidth, height: wingHeight)
+        let wingRect = CGRect(x: 0, y: 0, width: windowWidth, height: wingHeight)
         shape.path = leftWingPath(in: wingRect)
         shape.frame = rootView.bounds
         rootView.layer?.addSublayer(shape)
@@ -361,7 +372,7 @@ enum NotchCallButton {
     /// A thin sliver path at the notch-touching (right) edge — the starting state for expand.
     private static func collapsedWingPath(wingHeight: CGFloat) -> CGPath {
         let tr = topCornerRadius
-        let rect = CGRect(x: wingWidth - tr - 2, y: 0, width: tr + 2, height: wingHeight)
+        let rect = CGRect(x: windowWidth - tr - 2, y: 0, width: tr + 2, height: wingHeight)
         let path = CGMutablePath()
         path.move(to: CGPoint(x: rect.minX, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
@@ -380,7 +391,7 @@ enum NotchCallButton {
         wingHeight: CGFloat
     ) {
         let collapsedPath = collapsedWingPath(wingHeight: wingHeight)
-        let expandedPath = leftWingPath(in: CGRect(x: 0, y: 0, width: wingWidth, height: wingHeight))
+        let expandedPath = leftWingPath(in: CGRect(x: 0, y: 0, width: windowWidth, height: wingHeight))
 
         // Start from collapsed.
         shapeLayer.path = collapsedPath
@@ -434,7 +445,6 @@ enum NotchCallButton {
         guard isVisible, let panel, let screen = NSScreen.main else { return }
         let notchSize = screen.notchSize
         let screenFrame = screen.frame
-        let windowWidth = wingWidth
         let windowHeight = notchSize.height
         let notchLeftX = screenFrame.midX - notchSize.width / 2
         let originX = notchLeftX - windowWidth + notchOverlap

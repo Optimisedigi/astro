@@ -24,6 +24,13 @@ enum NotchShapePath {
     /// at least this much or a strip of wallpaper shows through the join.
     static let defaultTopCornerRadius: CGFloat = 6
 
+    /// Default radius of the wide bottom corners, which flare *inward* from the
+    /// straight sides. At the very bottom edge the shape's black therefore starts
+    /// `defaultTopCornerRadius + defaultBottomCornerRadius` in from its bounding
+    /// box, so anything joining the notch must reach past that or a wedge of
+    /// wallpaper shows through under the curve.
+    static let defaultBottomCornerRadius: CGFloat = 14
+
     /// Generate a `CGPath` for the notch shape.
     ///
     /// - Parameters:
@@ -34,7 +41,7 @@ enum NotchShapePath {
     static func path(
         in rect: CGRect,
         topCornerRadius: CGFloat = NotchShapePath.defaultTopCornerRadius,
-        bottomCornerRadius: CGFloat = 14
+        bottomCornerRadius: CGFloat = NotchShapePath.defaultBottomCornerRadius
     ) -> CGPath {
         let path = CGMutablePath()
 

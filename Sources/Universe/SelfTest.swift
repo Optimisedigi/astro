@@ -231,6 +231,13 @@ enum SelfTest {
             let wingRightX = anchorLeftX + NotchCallButton.notchOverlapForTests
             check(wingRightX >= notchSolidLeftX,
                   "notch: wing reaches the notch's solid edge, leaving no seam")
+
+            // Along the bottom edge the notch's black starts further in still,
+            // because its bottom corners flare inward. Covering only the straight
+            // side left a visible wedge under that curve.
+            let notchSolidBottomLeftX = notchSolidLeftX + NotchShapePath.defaultBottomCornerRadius
+            check(wingRightX >= notchSolidBottomLeftX,
+                  "notch: wing covers the notch's bottom corner flare")
         }
 
         // The call wing butts into the notch cutout: its right edge must be a
