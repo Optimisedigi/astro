@@ -1,9 +1,6 @@
 import AppKit
 import os
 
-// simplification: full CallSession (voice call lifecycle) is wired in a later
-// phase; the wings show/hide and toggle correctly without it.
-
 private let logger = Logger(
     subsystem: "com.universe.app",
     category: "callbutton"
@@ -25,7 +22,10 @@ enum NotchCallButton {
     private static var isVisible = false
     private(set) static var isInCall = false
     private static var labelField: NSTextField?
-    // private static var callSession: CallSession? // wired in later phase
+
+    /// The live voice call, or nil when idle. Held for the duration of the call
+    /// so `endCall()` can shut the same session down.
+    private static var callSession: CallSession?
 
     /// Whether the panel is temporarily hidden because a notch overlay is active.
     private static var isHiddenByOverlay = false
@@ -322,13 +322,33 @@ enum NotchCallButton {
 
     /// Begin a call — switch icon to red disconnect, show the timer wing, and start the voice session.
     private static func startCall() {
+        // Without the microphone the call would greet the user and then listen
+        // to nothing, which looks like a hung call. Ask first, and only commit
+        // to the call once access is granted.
+        guard VoiceService.isAlreadyAuthorized else {
+            logger.info("Call requested without microphone access — requesting")
+            Task { @MainActor in
+                guard await VoiceService.shared.requestPermissions() else {
+                    logger.warning("Microphone denied — cannot start call")
+                    PanelController.shared.openSheet(.permissions)
+                    return
+                }
+                beginCall()
+            }
+            return
+        }
+        beginCall()
+    }
+
+    private static func beginCall() {
         logger.info("Call started")
         isInCall = true
         updateLabel(disconnect: true)
         NotchCallTimer.show()
 
-        // Full CallSession (voice call lifecycle) is wired in a later phase.
-        // The wings show/hide and toggle correctly without it.
+        let session = CallSession()
+        callSession = session
+        session.start()
     }
 
     /// End a call — revert icon to white phone, hide the timer wing, and stop the voice session.
@@ -345,7 +365,8 @@ enum NotchCallButton {
             panel.orderFrontRegardless()
         }
 
-        // callSession?.end() // wired in later phase
+        callSession?.end()
+        callSession = nil
     }
 
     /// Update the icon and tint based on call state.
