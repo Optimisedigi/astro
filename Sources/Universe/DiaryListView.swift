@@ -127,6 +127,14 @@ struct DiaryListView: View {
 
     private func startDictation() {
         errorMessage = nil
+
+        // VoiceService is one shared instance with one set of callbacks, so
+        // taking the microphone here would otherwise hijack chat's handlers and
+        // leave them nil on stop — silently breaking the chat mic. Turn chat
+        // voice mode off first; it unhooks itself cleanly and the user re-arms
+        // it with its own mic button.
+        PanelController.shared.chatState.disableVoiceMode()
+
         // Dictation only — the transcript goes straight into the draft and is
         // never handed to the agent.
         voice.onPartialTranscript = { partial in draft = partial }
