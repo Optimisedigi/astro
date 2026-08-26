@@ -279,6 +279,19 @@ final class VoiceService: ObservableObject {
             do {
                 try inputNode.setVoiceProcessingEnabled(true)
                 logger.info("Voice processing (AEC) enabled on input node")
+
+                // The VP unit assumes it is running a voice chat and ducks
+                // "other audio" so a remote caller stays audible. Kokoro plays
+                // through a separate engine, so VP counts our own assistant as
+                // other audio and fades her out while the microphone is open.
+                // Duck as little as possible, and never on voice activity.
+                if #available(macOS 14.0, *) {
+                    inputNode.voiceProcessingOtherAudioDuckingConfiguration =
+                        AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                            enableAdvancedDucking: false,
+                            duckingLevel: .min
+                        )
+                }
             } catch {
                 logger.error("Failed to enable voice processing: \(error.localizedDescription)")
             }
