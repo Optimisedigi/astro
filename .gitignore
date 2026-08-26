@@ -1,3 +1,6 @@
 .build/
 Universe.xcodeproj/
 .DS_Store
+
+# Agent scratch (uploads, plans, session state)
+.gg/
