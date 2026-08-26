@@ -280,9 +280,10 @@ struct ChatView: View {
     @State private var showingTranscript = false
     @ObservedObject private var taskStore = TaskStore.shared
     @ObservedObject private var skillStore = SkillStore.shared
+    @ObservedObject private var diaryStore = DiaryStore.shared
 
-    /// Tama's exact tab set, in its order.
-    private let tabLabels = ["Chats", "Reminders", "Routines", "Tasks", "Skills", "Tools"]
+    /// Tama's tab set, plus Diary — which is local-only and never reaches a model.
+    private let tabLabels = ["Chats", "Diary", "Reminders", "Routines", "Tasks", "Skills", "Tools"]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -313,14 +314,16 @@ struct ChatView: View {
                     }
                 }
             case 1:
-                RoutineListView(store: schedules, kind: .reminder)
+                DiaryListView(store: diaryStore)
             case 2:
-                RoutineListView(store: schedules, kind: .routine)
+                RoutineListView(store: schedules, kind: .reminder)
             case 3:
-                TaskListView(store: taskStore)
+                RoutineListView(store: schedules, kind: .routine)
             case 4:
-                SkillListView(store: skillStore)
+                TaskListView(store: taskStore)
             case 5:
+                SkillListView(store: skillStore)
+            case 6:
                 ToolListView()
             default:
                 EmptyView()

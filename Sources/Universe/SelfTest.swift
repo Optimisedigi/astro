@@ -119,6 +119,9 @@ enum SelfTest {
         // 3b. Long-term memory + soul
         await runMemoryChecks(check: check)
 
+        // 3b-ii. Diary storage (local-only, keyed by date)
+        await runDiaryChecks(check: check)
+
         // 3c. Single-instance arbitration
         runSingleInstanceChecks(check: check)
 
@@ -686,6 +689,59 @@ enum SelfTest {
         AppDelegate.waitForExitForTests(of: [NSRunningApplication.current], timeout: 5)
         check(Date().timeIntervalSince(selfWait) < 0.2,
               "instance: eviction never waits on or kills the current process")
+    }
+
+    /// Diary storage. Runs against a throwaway directory so the user's real
+    /// diary is never touched.
+    @MainActor
+    static func runDiaryChecks(check: (Bool, String) -> Void) async {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("universe-selftest-diary-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let diary = DiaryStore(directory: scratch)
+        check(diary.days.isEmpty, "diary: empty store starts with no days")
+        check(DiaryStore.defaultDirectory().lastPathComponent == "diary",
+              "diary: real store lives in Application Support, not the test directory")
+
+        let today = Date()
+        let yesterday = today.addingTimeInterval(-86400)
+        check(diary.addEntry("first thing", on: today), "diary: entry saved")
+        check(diary.addEntry("second thing", on: today), "diary: second entry saved")
+        check(diary.addEntry("older thing", on: yesterday), "diary: entry saved on another day")
+
+        check(!diary.addEntry("   ", on: today), "diary: blank entry rejected")
+
+        // Two entries on one day share a page; different days are separate.
+        check(diary.day(for: today)?.entries.count == 2, "diary: same-day entries share a page")
+        check(diary.day(for: yesterday)?.entries.count == 1, "diary: other day kept separate")
+        check(diary.days.first?.date == DiaryStore.key(for: today), "diary: newest day sorts first")
+
+        // The date is the filename, so lookup by day needs no index.
+        let expected = scratch.appendingPathComponent("\(DiaryStore.key(for: today)).json")
+        check(FileManager.default.fileExists(atPath: expected.path),
+              "diary: day is stored under its own date filename")
+
+        // Reload from disk: entries must survive a restart.
+        let reloaded = DiaryStore(directory: scratch)
+        check(reloaded.days.count == 2, "diary: days reload from disk")
+        check(reloaded.day(for: today)?.entries.first?.text == "first thing",
+              "diary: entry text survives a reload")
+
+        // Deleting the last entry removes the page rather than leaving it blank.
+        if let day = reloaded.day(for: yesterday), let entry = day.entries.first {
+            reloaded.deleteEntry(dayKey: day.date, entryID: entry.id)
+        }
+        check(reloaded.day(for: yesterday) == nil, "diary: emptied day is removed")
+
+        // The whole point: the diary must never reach a model.
+        let memoryScratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("universe-selftest-diarymem-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: memoryScratch) }
+        let memory = MemoryStore(storageURL: memoryScratch)
+        check(!memory.promptContext().contains("first thing"),
+              "diary: entries never appear in the model prompt")
     }
 
     /// Long-term memory: facts, soul, budgets and prompt injection. Runs against
