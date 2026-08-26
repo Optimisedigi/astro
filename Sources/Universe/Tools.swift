@@ -142,6 +142,7 @@ final class ToolRegistry {
     let tools: [any AgentTool] = [
         BashTool(), ReadTool(), WriteTool(), EditTool(),
         CreateReminderTool(), CreateRoutineTool(), ListSchedulesTool(), DeleteScheduleTool(),
+        RememberTool(), ForgetTool(), RecallTool(), SoulSetTool(), SoulDeleteTool(),
     ]
 
     var schemas: [[String: Any]] {

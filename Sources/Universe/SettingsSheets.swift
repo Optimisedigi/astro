@@ -78,15 +78,16 @@ struct SettingsCard<Content: View>: View {
     }
 }
 
-/// The three sheets the top bar can open.
+/// The sheets the top bar can open.
 enum SettingsSheetKind: String, Identifiable {
-    case ai, voice, permissions, onboarding
+    case ai, voice, memory, permissions, onboarding
     var id: String { rawValue }
 
     var symbol: String {
         switch self {
         case .ai: return "sparkles"
         case .voice: return "waveform"
+        case .memory: return "brain"
         case .permissions: return "lock.shield"
         case .onboarding: return "hand.raised"
         }
@@ -96,6 +97,7 @@ enum SettingsSheetKind: String, Identifiable {
         switch self {
         case .ai: return "AI settings"
         case .voice: return "Voice settings"
+        case .memory: return "Memory"
         case .permissions: return "Permissions"
         case .onboarding: return "Onboarding"
         }

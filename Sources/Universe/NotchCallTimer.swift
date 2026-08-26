@@ -38,6 +38,9 @@ enum NotchCallTimer {
     /// Width of the wing extension.
     private static let wingWidth: CGFloat = 90
 
+    /// Nudges the right wing further left so it sits tighter against the notch.
+    private static let rightWingLeftShift: CGFloat = 10
+
     /// Top corner radius on the right side (matches notch curvature).
     private static let topCornerRadius: CGFloat = 6
 
@@ -73,7 +76,7 @@ enum NotchCallTimer {
 
         // Position: right side of notch, overlapping into it.
         let notchRightX = screenFrame.midX + notchSize.width / 2
-        let originX = notchRightX - topCornerRadius - 8
+        let originX = notchRightX - topCornerRadius - 8 - rightWingLeftShift
         let originY = screenFrame.maxY - windowHeight
 
         let newPanel = NSPanel(
@@ -387,7 +390,7 @@ enum NotchCallTimer {
         let windowWidth = wingWidth
         let windowHeight = notchSize.height
         let notchRightX = screenFrame.midX + notchSize.width / 2
-        let originX = notchRightX - topCornerRadius - 8
+        let originX = notchRightX - topCornerRadius - 8 - rightWingLeftShift
         let originY = screenFrame.maxY - windowHeight
         panel.setFrame(
             NSRect(x: originX, y: originY, width: windowWidth, height: windowHeight),

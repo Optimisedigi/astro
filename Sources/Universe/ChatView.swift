@@ -294,6 +294,8 @@ struct ChatView: View {
                 AISettingsView(registry: registry, login: state.login) { sheet = nil }
             case .voice:
                 VoiceSettingsView(state: state) { sheet = nil }
+            case .memory:
+                MemorySettingsView { sheet = nil }
             case .permissions:
                 PermissionsView(checker: state.permissions) { sheet = nil }
             case .onboarding:

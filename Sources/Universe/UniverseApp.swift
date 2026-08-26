@@ -12,6 +12,7 @@ struct UniverseApp: App {
             Divider()
             Button("AI Settings…") { PanelController.shared.openSheet(.ai) }
             Button("Voice Settings…") { PanelController.shared.openSheet(.voice) }
+            Button("Memory…") { PanelController.shared.openSheet(.memory) }
             Button("Permissions…") { PanelController.shared.openSheet(.permissions) }
             Divider()
             Button("Advanced (API key)…") {

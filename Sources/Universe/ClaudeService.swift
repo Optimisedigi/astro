@@ -46,7 +46,22 @@ actor ClaudeService {
     list them (list_schedules), and delete them (delete_schedule). \
     Reminders fire macOS notifications; routines run a prompt and notify with the result. \
     Use them proactively and finish tasks completely.
+
+    You have long-term memory. Use `remember` proactively whenever the user shares something \
+    meaningful about themselves — their name, preferences, projects, people in their life. \
+    Keep each fact atomic. Use `recall` to look up details not already in your context, and \
+    `forget` when something stops being true or they ask you to drop it. \
+    Use `soul_set` to record what you learn about working with *this* user — corrections they \
+    make, boundaries they set, how they like you to communicate. Never announce that you are \
+    saving to memory; just do it and carry on.
     """
+
+    /// The system prompt plus everything the assistant remembers. Rebuilt per
+    /// request so a fact saved mid-conversation applies on the very next turn.
+    private static func systemPromptWithMemory() async -> String {
+        let memory = await MainActor.run { MemoryStore.shared.promptContext() }
+        return memory.isEmpty ? systemPrompt : systemPrompt + "\n\n" + memory
+    }
 
     /// Streams events for one turn. Messages and tools are Anthropic API format.
     nonisolated func streamEvents(messages: [[String: Any]], tools: [[String: Any]]) -> AsyncThrowingStream<StreamEvent, Error> {
@@ -103,7 +118,7 @@ actor ClaudeService {
         } else {
             throw ServiceError.notSignedIn
         }
-        systemBlocks.append(["type": "text", "text": Self.systemPrompt])
+        systemBlocks.append(["type": "text", "text": await Self.systemPromptWithMemory()])
 
         var body: [String: Any] = [
             "model": model.id,
@@ -200,8 +215,9 @@ actor ClaudeService {
         request.setValue("universe/0.1 (macOS)", forHTTPHeaderField: "user-agent")
 
         // Convert Anthropic message format to OpenAI format
+        let systemText = await Self.systemPromptWithMemory()
         let openAIMessages: [[String: Any]] = [
-            ["role": "system", "content": Self.systemPrompt],
+            ["role": "system", "content": systemText],
         ] + messages.map { msg -> [String: Any] in
             var m = msg
             if m["role"] as? String == "assistant", let content = m["content"] as? [[String: Any]] {
@@ -295,12 +311,13 @@ actor ClaudeService {
             return ["role": role, "parts": parts]
         }
 
+        let systemText = await Self.systemPromptWithMemory()
         var body: [String: Any] = [
             "model": model.id,
             "project": projectId,
             "request": [
                 "contents": contents,
-                "systemInstruction": ["parts": [["text": Self.systemPrompt]]],
+                "systemInstruction": ["parts": [["text": systemText]]],
                 "generationConfig": ["maxOutputTokens": 4096],
             ],
         ]
@@ -359,8 +376,9 @@ actor ClaudeService {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue("universe/0.1 (macOS)", forHTTPHeaderField: "user-agent")
 
+        let systemText = await Self.systemPromptWithMemory()
         let openAIMessages: [[String: Any]] = [
-            ["role": "system", "content": Self.systemPrompt],
+            ["role": "system", "content": systemText],
         ] + messages.map { msg -> [String: Any] in
             var m = msg
             if m["role"] as? String == "assistant", let content = m["content"] as? [[String: Any]] {

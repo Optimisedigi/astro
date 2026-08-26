@@ -116,6 +116,9 @@ enum SelfTest {
         // 3. Schedule parsing + schedule tools
         await runScheduleChecks(check: check)
 
+        // 3b. Long-term memory + soul
+        await runMemoryChecks(check: check)
+
         // 4. Markdown scanner
         runMarkdownChecks(check: check)
 
@@ -615,6 +618,72 @@ enum SelfTest {
         check(String(Markdown.inline("**bold** and `code`").characters) == "bold and code", "markdown: inline spans stripped to text")
         check(!String(Markdown.inline("unclosed **bold").characters).isEmpty, "markdown: unclosed span does not crash")
         check(kinds("") == [], "markdown: empty input yields no blocks")
+    }
+
+    /// Long-term memory: facts, soul, budgets and prompt injection. Runs against
+    /// a throwaway store so the user's real memory is never touched.
+    @MainActor
+    static func runMemoryChecks(check: (Bool, String) -> Void) async {
+        // A throwaway file: pointing this at the real store would delete the
+        // user's actual memory the moment the test wipes it.
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("universe-selftest-memory-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let memory = MemoryStore(storageURL: scratch)
+
+        check(memory.promptContext().isEmpty, "memory: empty store injects nothing")
+        check(MemoryStore.defaultStorageURL().lastPathComponent == "memory.json",
+              "memory: real store lives in Application Support, not the test file")
+
+        memory.saveFact(category: "user_info", subject: "name", content: "Pe", importance: 10)
+        check(memory.facts.count == 1, "memory: fact saved")
+        check(memory.promptContext().contains("name: Pe"), "memory: fact reaches the prompt")
+        check(memory.promptContext().contains("### user_info"), "memory: facts grouped by category")
+
+        // Same category+subject updates in place rather than duplicating.
+        memory.saveFact(category: "user_info", subject: "name", content: "Peter")
+        check(memory.facts.count == 1, "memory: same subject updates in place")
+        check(memory.promptContext().contains("name: Peter"), "memory: updated value is injected")
+
+        memory.saveFact(category: "user_info", subject: "health_note",
+                        content: "private detail", sensitive: true)
+        check(memory.promptContext().contains("do not raise unprompted"),
+              "memory: sensitive facts are flagged in the prompt")
+
+        check(memory.searchFacts(query: "peter").count == 1, "memory: recall finds by content")
+        check(memory.searchFacts(query: "zzz-nothing").isEmpty, "memory: recall misses cleanly")
+
+        memory.setSoulAspect(aspect: "communication_style", content: "Wants short answers.")
+        check(memory.promptContext().contains("## Soul"), "soul: aspect reaches the prompt")
+        check(memory.promptContext().contains("Wants short answers."), "soul: content is injected")
+        memory.setSoulAspect(aspect: "communication_style", content: "Wants very short answers.")
+        check(memory.soul.count == 1, "soul: same aspect updates in place")
+
+        // Budgets are hard caps — memory must never grow into an unbounded bill.
+        for i in 0..<400 {
+            memory.saveFact(category: "notes", subject: "bulk_\(i)",
+                            content: String(repeating: "filler ", count: 8), importance: 1)
+        }
+        let context = memory.promptContext()
+        check(context.count <= MemoryStore.factsCharBudget + MemoryStore.soulCharBudget,
+              "memory: injection stays inside the character budget")
+        check(context.contains("name: Peter"),
+              "memory: high-importance facts survive truncation")
+
+        check(memory.forgetFact(subject: "name"), "memory: forget removes a fact")
+        check(!memory.promptContext().contains("name: Peter"), "memory: forgotten fact leaves the prompt")
+        check(!memory.forgetFact(subject: "never-existed"), "memory: forgetting an unknown subject is a no-op")
+
+        check(memory.deleteSoulAspect(aspect: "communication_style"), "soul: delete removes an aspect")
+        check(!memory.promptContext().contains("## Soul"), "soul: deleted aspect leaves the prompt")
+
+        memory.removeAll()
+        check(memory.promptContext().isEmpty, "memory: wipe clears everything")
+
+        // The tools the model actually calls must be registered.
+        let names = Set(ToolRegistry.shared.tools.map(\.name))
+        check(names.isSuperset(of: ["remember", "forget", "recall", "soul_set", "soul_delete"]),
+              "memory: all five memory tools are registered")
     }
 
     // Schedule parsing + store checks run before UI exists, so they can use ScheduleStore safely.
