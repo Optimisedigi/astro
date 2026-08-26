@@ -69,7 +69,9 @@ final class ChatState: ObservableObject {
     func panelDidClose() {
         panelVisible = false
         voice.stopListening()
-        speech.stop()
+        // `shutdown()`, not `stop()`: stop() leaves the playback engine running,
+        // holding an audio device open behind a dismissed window.
+        speech.shutdown()
     }
 
     private func wireUtteranceHandler() {

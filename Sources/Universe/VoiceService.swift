@@ -391,8 +391,14 @@ final class VoiceService: ObservableObject {
         recognitionRequest?.endAudio()
         recognitionRequest = nil
 
-        audioEngine?.inputNode.removeTap(onBus: 0)
-        audioEngine?.stop()
+        if let engine = audioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            // Turn Voice Processing off explicitly. The VPIO unit keeps the
+            // input device open, so dropping the engine alone can leave the
+            // microphone — and its indicator — live.
+            try? engine.inputNode.setVoiceProcessingEnabled(false)
+        }
         audioEngine = nil
         prewarmedVoiceProcessing = false
 
