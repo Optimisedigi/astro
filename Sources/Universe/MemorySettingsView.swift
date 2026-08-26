@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The Memory sheet: everything the assistant has learned, and a way to delete it.
-/// Memory is written by the agent through the `remember` / `soul_set` tools; this
-/// pane is for reviewing and forgetting, which is why there is no add form.
+/// The Memory sheet: everything the assistant has learned, and a way to correct
+/// or delete it. Entries are created by the agent through the `remember` /
+/// `soul_set` tools, so there is no add form — but anything it got wrong can be
+/// rewritten here.
 struct MemorySettingsView: View {
     var onDone: () -> Void = {}
     @ObservedObject private var memory = MemoryStore.shared
@@ -83,6 +84,7 @@ struct MemorySettingsBody: View {
                         title: fact.subject,
                         detail: fact.content,
                         badge: fact.sensitive ? "private" : nil,
+                        save: { memory.updateFact(fact, content: $0) },
                         delete: { memory.deleteFact(fact) }
                     )
                 }
@@ -101,6 +103,7 @@ struct MemorySettingsBody: View {
                     title: aspect.aspect,
                     detail: aspect.content,
                     badge: nil,
+                    save: { memory.updateSoulAspect(aspect, content: $0) },
                     delete: { memory.deleteSoulAspect(aspect) }
                 )
             }
@@ -112,9 +115,12 @@ struct MemoryRow: View {
     let title: String
     let detail: String
     let badge: String?
+    let save: (String) -> Void
     let delete: () -> Void
 
     @State private var hovering = false
+    @State private var editing = false
+    @State private var draft = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -123,21 +129,56 @@ struct MemoryRow: View {
                     Text(title).fontWeight(.medium)
                     if let badge { StatusPill(text: badge) }
                 }
-                Text(detail)
+                if editing {
+                    TextField("", text: $draft, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                        .lineLimit(1 ... 6)
+                        .onSubmit(commit)
+                    HStack(spacing: 8) {
+                        Button("Save", action: commit)
+                        Button("Cancel") { editing = false }
+                    }
                     .font(.caption)
+                    .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 8)
-            Button(action: delete) {
-                Image(systemName: "trash").font(.caption)
+            if !editing {
+                Button(action: startEditing) {
+                    Image(systemName: "pencil").font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .opacity(hovering ? 1 : 0.25)
+                .accessibilityLabel("Edit \(title)")
+
+                Button(action: delete) {
+                    Image(systemName: "trash").font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .opacity(hovering ? 1 : 0.25)
+                .accessibilityLabel("Forget \(title)")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .opacity(hovering ? 1 : 0.25)
-            .accessibilityLabel("Forget \(title)")
         }
         .padding(.vertical, 3)
         .onHover { hovering = $0 }
+    }
+
+    private func startEditing() {
+        draft = detail
+        editing = true
+    }
+
+    private func commit() {
+        save(draft)
+        editing = false
     }
 }

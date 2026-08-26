@@ -53,6 +53,9 @@ final class MemoryStore: ObservableObject {
     /// Budget for the fact *store* on disk. Larger than the injection budget
     /// because only the top slice is ever sent.
     static let factsStoreBudget = 15000
+    /// Cap on a single hand-edited entry, so one long paste can't crowd every
+    /// other memory out of the prompt budget.
+    static let maxEntryChars = 1000
 
     static let shared = MemoryStore()
 
@@ -117,6 +120,18 @@ final class MemoryStore: ObservableObject {
         didChange()
     }
 
+    /// Rewrites a fact's content from the settings pane. Category and subject are
+    /// the identity the agent looks facts up by, so editing leaves them alone.
+    /// Blank input is ignored — deleting is the explicit way to remove a fact.
+    func updateFact(_ fact: Fact, content: String) {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != fact.content,
+              let index = facts.firstIndex(where: { $0.id == fact.id }) else { return }
+        facts[index].content = String(trimmed.prefix(Self.maxEntryChars))
+        facts[index].updatedAt = Date()
+        didChange()
+    }
+
     /// Substring search over subject and content, for the `recall` tool.
     func searchFacts(query: String) -> [Fact] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -154,6 +169,15 @@ final class MemoryStore: ObservableObject {
 
     func deleteSoulAspect(_ aspect: SoulAspect) {
         soul.removeAll { $0.id == aspect.id }
+        didChange()
+    }
+
+    func updateSoulAspect(_ aspect: SoulAspect, content: String) {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != aspect.content,
+              let index = soul.firstIndex(where: { $0.id == aspect.id }) else { return }
+        soul[index].content = String(trimmed.prefix(Self.maxEntryChars))
+        soul[index].updatedAt = Date()
         didChange()
     }
 
