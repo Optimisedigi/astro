@@ -89,6 +89,10 @@ final class VoiceService: ObservableObject {
     private let speechBoostFactor: Double = 3.0
     private var noiseFloorRMS: Double = 1e-4
     private var didMuteThisSession = false
+    /// When true, silence never ends the capture — only `finishCapture()` does.
+    private var isContinuous = false
+    /// Text banked from earlier segments of the same continuous capture.
+    private var committedText = ""
     private let defaultSilenceWindow: TimeInterval = 1.0
     private var silenceWindow: TimeInterval = 1.0
     private var hasSpoken = false
@@ -130,10 +134,14 @@ final class VoiceService: ObservableObject {
     ///   - muteAudio: When `true`, mutes system audio so music/dings aren't heard as speech.
     ///   - voiceProcessing: When `true`, enables Apple AEC on the input node.
     ///   - silenceDuration: Override the silence window. `nil` uses 1.0s.
+    ///   - continuous: When `true`, silence never ends the capture — it runs
+    ///     until `finishCapture()` is called. For long-form dictation where the
+    ///     speaker pauses to think and a 1s gap must not end the take.
     func startFollowUpCapture(
         muteAudio: Bool = true,
         voiceProcessing: Bool = false,
-        silenceDuration: TimeInterval? = nil
+        silenceDuration: TimeInterval? = nil,
+        continuous: Bool = false
     ) {
         let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         guard micStatus == .authorized else {
@@ -157,35 +165,17 @@ final class VoiceService: ObservableObject {
         }
 
         silenceWindow = silenceDuration ?? defaultSilenceWindow
+        isContinuous = continuous
         state = .followUp
         isListening = true
         MenuBarMood.shared.setActivity(.listening)
         capturedTranscript = ""
+        committedText = ""
         transcript = ""
         hasSpoken = false
         firstSpeechFired = false
         lastHeard = Date()
         lastTranscriptUpdate = nil
-
-        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-        recognizer?.defaultTaskHint = .dictation
-        speechRecognizer = recognizer
-
-        guard let speechRecognizer, speechRecognizer.isAvailable else {
-            logger.error("Speech recognizer not available")
-            haltPipeline()
-            state = .idle
-            isListening = false
-            onError?(VoiceError.recognizerUnavailable.localizedDescription)
-            return
-        }
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = false
-        request.taskHint = .dictation
-        request.addsPunctuation = false
-        recognitionRequest = request
 
         if muteAudio {
             SystemAudioMuter.muteSystemOutput()
@@ -204,11 +194,44 @@ final class VoiceService: ObservableObject {
             logger.info("Reusing prewarmed capture engine (VP already adapted)")
         }
 
+        guard startRecognitionSegment() else {
+            haltPipeline()
+            state = .idle
+            isListening = false
+            return
+        }
+
+        startSilenceMonitor()
+        logger.info("Speech capture started (generation: \(self.generation), continuous: \(continuous))")
+    }
+
+    /// Attaches a fresh recognizer and request to the running engine.
+    ///
+    /// Split out so a continuous capture can rotate the recognizer without
+    /// touching the audio engine: the tap reads `recognitionRequest` each time it
+    /// fires, so swapping the request keeps audio flowing uninterrupted.
+    @discardableResult
+    private func startRecognitionSegment() -> Bool {
+        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        recognizer?.defaultTaskHint = .dictation
+        speechRecognizer = recognizer
+
+        guard let recognizer, recognizer.isAvailable else {
+            logger.error("Speech recognizer not available")
+            onError?(VoiceError.recognizerUnavailable.localizedDescription)
+            return false
+        }
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = false
+        request.taskHint = .dictation
+        request.addsPunctuation = false
+        recognitionRequest = request
+
         let currentGeneration = generation
 
-        recognitionTask = speechRecognizer.recognitionTask(
-            with: request
-        ) { [weak self] result, _ in
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, _ in
             let nextTranscript = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? false
             Task { @MainActor [weak self] in
@@ -218,22 +241,66 @@ final class VoiceService: ObservableObject {
                 if let nextTranscript, !nextTranscript.isEmpty {
                     let changed = nextTranscript != self.capturedTranscript
                     self.capturedTranscript = nextTranscript
-                    self.transcript = nextTranscript
+                    self.transcript = self.fullTranscript
                     self.hasSpoken = true
                     if changed {
                         self.lastTranscriptUpdate = Date()
                     }
-                    self.onPartialTranscript?(nextTranscript)
+                    self.onPartialTranscript?(self.fullTranscript)
                 }
 
                 if isFinal {
-                    self.finalize()
+                    // Apple ends a recognition task on its own after roughly a
+                    // minute of audio. In continuous mode that must not end the
+                    // take, so bank what was heard and start a fresh segment.
+                    if self.isContinuous {
+                        self.rotateRecognitionSegment()
+                    } else {
+                        self.finalize()
+                    }
                 }
             }
         }
+        return true
+    }
 
-        startSilenceMonitor()
-        logger.info("Speech capture started (generation: \(currentGeneration))")
+    /// Banks the current segment and starts another, keeping the engine running.
+    private func rotateRecognitionSegment() {
+        let segment = capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !segment.isEmpty {
+            committedText = committedText.isEmpty ? segment : committedText + " " + segment
+        }
+        capturedTranscript = ""
+
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+
+        logger.info("Rotating recognition segment — \(self.committedText.count) chars banked")
+        guard startRecognitionSegment() else {
+            finalize()
+            return
+        }
+        lastTranscriptUpdate = nil
+    }
+
+    /// Everything heard this capture: banked segments plus the live one.
+    private var fullTranscript: String {
+        let current = capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if committedText.isEmpty { return current }
+        if current.isEmpty { return committedText }
+        return committedText + " " + current
+    }
+
+    /// Ends a continuous capture and delivers everything heard. This is the
+    /// manual stop: `stopFollowUpCapture()` discards the transcript instead.
+    func finishCapture() {
+        guard state == .followUp else {
+            stopFollowUpCapture()
+            return
+        }
+        finalize()
     }
 
     /// Starts the audio engine with Voice Processing enabled but without
@@ -266,6 +333,9 @@ final class VoiceService: ObservableObject {
         haltPipeline()
         state = .idle
         isListening = false
+        isContinuous = false
+        capturedTranscript = ""
+        committedText = ""
         if MenuBarMood.shared.mood == .listening { MenuBarMood.shared.setActivity(nil) }
     }
 
@@ -351,7 +421,7 @@ final class VoiceService: ObservableObject {
 
     private func finalize() {
         guard state == .followUp else { return }
-        let text = capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = fullTranscript
         let words = text.split { $0.isWhitespace }.count
         logger.info("Speech capture finalized — \(words) words, \(text.count) chars")
 
@@ -360,6 +430,8 @@ final class VoiceService: ObservableObject {
         isListening = false
         if MenuBarMood.shared.mood == .listening { MenuBarMood.shared.setActivity(nil) }
         capturedTranscript = ""
+        committedText = ""
+        isContinuous = false
         hasSpoken = false
         firstSpeechFired = false
         lastTranscriptUpdate = nil
@@ -388,7 +460,9 @@ final class VoiceService: ObservableObject {
                     false
                 }
 
-                if audioSilent, transcriptIdle {
+                // A continuous capture runs until the user stops it, so a pause
+                // for thought never ends the take.
+                if audioSilent, transcriptIdle, !self.isContinuous {
                     self.finalize()
                 }
             }

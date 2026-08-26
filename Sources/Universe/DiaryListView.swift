@@ -130,9 +130,12 @@ struct DiaryListView: View {
     // MARK: - Actions
 
     private func commitDraft() {
+        // Stop first: finishing the capture delivers the last words into the
+        // draft, so saving mid-sentence keeps them instead of dropping them — and
+        // clearing the draft afterwards is not undone by a late transcript.
+        stopDictation()
         guard store.addEntry(draft) else { return }
         draft = ""
-        stopDictation()
     }
 
     private func toggleDictation() {
@@ -175,21 +178,24 @@ struct DiaryListView: View {
     }
 
     private func beginCapture() {
-        do {
-            try voice.startListening()
-            isDictating = true
-        } catch {
-            errorMessage = error.localizedDescription
+        // Continuous: a diary entry is written in pauses, so silence must not end
+        // the take. It runs until the user presses the mic again.
+        voice.startFollowUpCapture(muteAudio: false, voiceProcessing: true, continuous: true)
+        guard voice.isListening else {
+            errorMessage = VoiceService.VoiceError.noMic.localizedDescription
+            return
         }
+        isDictating = true
     }
 
     private func stopDictation() {
         guard isDictating else { return }
         isDictating = false
+        // finishCapture delivers what was heard; stopListening would discard it.
+        voice.finishCapture()
         voice.onPartialTranscript = nil
         voice.onCaptureComplete = nil
         voice.onError = nil
-        voice.stopListening()
     }
 
     /// "Today" / "Yesterday" / "Tuesday, 26 August 2026".
