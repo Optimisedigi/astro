@@ -208,14 +208,20 @@ final class ChatState: ObservableObject {
                     guard let self, let last = self.session.messages.indices.last else { return }
                     self.session.messages[last].text = text
                 }
+                // Speak while the reply is still arriving, so Kokoro starts on
+                // the first sentence instead of waiting for the whole response.
+                if voiceMode { speech.beginStreaming() }
+
                 var firstToken = true
                 try await loop.run(apiMessages: apiMessages, streamProvider: ClaudeService.shared.streamEvents) { [weak self] delta in
+                    guard let self else { return }
                     if firstToken {
                         firstToken = false
                         MenuBarMood.shared.setActivity(.responding)
                         MascotController.shared.setState(.responding)
                     }
-                    self?.queue.append(delta)
+                    self.queue.append(delta)
+                    if self.voiceMode { self.speech.feedChunk(delta) }
                 } onToolActivity: { [weak self] activity in
                     self?.apply(activity)
                 }
@@ -236,10 +242,14 @@ final class ChatState: ObservableObject {
                     }
                 }
                 if voiceMode {
-                    speech.speak(session.messages[session.messages.count - 1].text)
+                    // Waits for queued audio to drain, so the microphone
+                    // reopens only once she has actually stopped talking.
+                    await speech.finishStreaming()
                     resumeListeningAfterReply()
                 }
             } catch {
+                // Drop any half-spoken reply rather than talk over the error.
+                if voiceMode { speech.stop() }
                 errorMessage = error.localizedDescription
                 MenuBarMood.shared.setActivity(.error)
                 MascotController.shared.setState(.thinking)
