@@ -67,11 +67,30 @@ final class ChatState: ObservableObject {
     }
 
     private func wireUtteranceHandler() {
+        // Live dictation: show words in the input field as they are recognised,
+        // so the user can see what is being heard before it sends.
+        voice.onPartialTranscript = { [weak self] partial in
+            self?.input = partial
+        }
+
         voice.onCaptureComplete = { [weak self] text in
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
+            guard !trimmed.isEmpty else {
+                // Nothing recognised — clear the partial so a stale phrase is
+                // never left sitting in the field.
+                self?.input = ""
+                return
+            }
             self?.input = trimmed
             self?.send()
+        }
+
+        // Without this the chat path fails silently: `try? startListening()`
+        // discards the throw, so a mic that never opens looked identical to one
+        // that is simply hearing nothing.
+        voice.onError = { [weak self] message in
+            self?.errorMessage = message
+            self?.voiceMode = false
         }
     }
 
@@ -90,6 +109,9 @@ final class ChatState: ObservableObject {
 
     func disableVoiceMode() {
         voiceMode = false
+        voice.onPartialTranscript = nil
+        voice.onCaptureComplete = nil
+        voice.onError = nil
         voice.stopListening()
         speech.stop()
     }
