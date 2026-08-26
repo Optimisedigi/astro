@@ -204,6 +204,18 @@ enum SelfTest {
         check(path.boundingBox.minY == 0, "notch: flat top is flush with y=0")
         check(abs(path.boundingBox.width - rect.width) < 0.5, "notch: path spans the full width")
 
+        // The call wing butts into the notch cutout: its right edge must be a
+        // straight full-height line, or wallpaper shows through the seam.
+        let wingRect = CGRect(x: 0, y: 0, width: 60, height: 32)
+        let wing = NotchCallButton.leftWingPath(in: wingRect)
+        check(!wing.isEmpty, "wing: path draws")
+        check(abs(wing.boundingBox.maxX - wingRect.maxX) < 0.5, "wing: reaches the notch edge")
+        let rightEdge = wingRect.maxX - 0.5
+        let topTouches = wing.contains(CGPoint(x: rightEdge, y: 1), using: .winding)
+        let midTouches = wing.contains(CGPoint(x: rightEdge, y: wingRect.midY), using: .winding)
+        let bottomTouches = wing.contains(CGPoint(x: rightEdge, y: wingRect.maxY - 1), using: .winding)
+        check(topTouches && midTouches && bottomTouches, "wing: right edge is solid top to bottom (no seam)")
+
         // Larger radii still produce a valid closed path (animation endpoints).
         let expanded = NotchShapePath.path(in: CGRect(x: 0, y: 0, width: 380, height: 100),
                                            topCornerRadius: 14, bottomCornerRadius: 20)
@@ -324,7 +336,11 @@ enum SelfTest {
         if let added = store.entries.first(where: { $0.textContent == "clipboard selftest alpha" }) {
             store.delete(added)
         }
-        check(store.entries.count == before.count, "clipboard: delete removes the entry")
+        // Assert the entry is gone rather than comparing counts: adding while the
+        // history is at its cap evicts the oldest entry, so the total never comes
+        // back to where it started.
+        check(!store.entries.contains { $0.textContent == "clipboard selftest alpha" },
+              "clipboard: delete removes the entry")
 
         // Panel tool registry (Night Shift may be absent on unsupported hardware)
         let registry = PanelToolRegistry.shared

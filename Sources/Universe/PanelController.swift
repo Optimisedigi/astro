@@ -66,12 +66,20 @@ final class PanelController {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         MascotController.shared.resume()
+        chatState.panelDidOpen()
+    }
+
+    /// Hide the panel and release everything it was holding — in particular the
+    /// microphone, which must not stay open behind a dismissed window.
+    func hide() {
+        panel.orderOut(nil)
+        MascotController.shared.pause()
+        chatState.panelDidClose()
     }
 
     func toggle() {
         if panel.isVisible {
-            panel.orderOut(nil)
-            MascotController.shared.pause()
+            hide()
         } else {
             show()
         }

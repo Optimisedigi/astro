@@ -46,9 +46,24 @@ final class ChatState: ObservableObject {
             return
         }
         // A restored voice mode still needs its utterance handler wired, or the
-        // first thing the user says after a relaunch goes nowhere.
+        // first thing the user says after a relaunch goes nowhere. The panel
+        // starts the microphone itself when it opens.
+        wireUtteranceHandler()
+    }
+
+    /// The panel became visible. Tama opens the microphone whenever its window
+    /// is up, so the user can just start talking.
+    func panelDidOpen() {
+        guard voiceMode, VoiceService.isAlreadyAuthorized else { return }
         wireUtteranceHandler()
         try? voice.startListening()
+    }
+
+    /// The panel was dismissed (⌥Space or the menubar). Release the microphone
+    /// immediately — a hidden window must never hold the input device open.
+    func panelDidClose() {
+        voice.stopListening()
+        speech.stop()
     }
 
     private func wireUtteranceHandler() {

@@ -39,6 +39,11 @@ enum NotchCallButton {
     /// Top corner radius on the left side (matches notch curvature).
     private static let topCornerRadius: CGFloat = 6
 
+    /// How far the wing slides under the notch cutout. Butting the two edges up
+    /// exactly still leaves a hairline of wallpaper on fractional-scale displays,
+    /// so overlap slightly — the notch is opaque black and hides it.
+    private static let notchOverlap: CGFloat = 2
+
     /// Bottom corner radius (matching notch aesthetic).
     private static let bottomCornerRadius: CGFloat = 10
 
@@ -65,7 +70,7 @@ enum NotchCallButton {
 
         // Position: overlap into the notch so the wing blends seamlessly.
         let notchLeftX = screenFrame.midX - notchSize.width / 2
-        let originX = notchLeftX - windowWidth
+        let originX = notchLeftX - windowWidth + notchOverlap
         let originY = screenFrame.maxY - windowHeight
 
         let newPanel = NSPanel(
@@ -420,7 +425,7 @@ enum NotchCallButton {
         let windowWidth = wingWidth
         let windowHeight = notchSize.height
         let notchLeftX = screenFrame.midX - notchSize.width / 2
-        let originX = notchLeftX - windowWidth
+        let originX = notchLeftX - windowWidth + notchOverlap
         let originY = screenFrame.maxY - windowHeight
         panel.setFrame(NSRect(x: originX, y: originY, width: windowWidth, height: windowHeight), display: true)
     }
@@ -441,7 +446,7 @@ enum NotchCallButton {
     /// ╰────────╲       ← bottom-left: outward curve, bottom-right: inward quad curve (wing flare)
     ///           ┘      ← bottom at full width (flush with notch)
     /// ```
-    private static func leftWingPath(in rect: CGRect) -> CGPath {
+    static func leftWingPath(in rect: CGRect) -> CGPath {
         let path = CGMutablePath()
         let tr = topCornerRadius
         let br = bottomCornerRadius
@@ -452,22 +457,10 @@ enum NotchCallButton {
         // Top edge → right at full width (flush with notch).
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
 
-        // Top-right: inward quad curve — flares from full width down to body.
-        // Mirrors the NotchShapePath top-left pattern.
-        path.addQuadCurve(
-            to: CGPoint(x: rect.maxX - tr, y: rect.minY + tr),
-            control: CGPoint(x: rect.maxX - tr, y: rect.minY)
-        )
-
-        // Right side straight down (body is inset by tr from the notch edge).
-        path.addLine(to: CGPoint(x: rect.maxX - tr, y: rect.maxY - tr))
-
-        // Bottom-right: inward quad curve — body flares back out to full width.
-        // Mirrors the top-right curve.
-        path.addQuadCurve(
-            to: CGPoint(x: rect.maxX, y: rect.maxY),
-            control: CGPoint(x: rect.maxX - tr, y: rect.maxY)
-        )
+        // Right side straight down at full width. The wing butts directly into
+        // the notch cutout, so any inward flare here would show as a seam of
+        // wallpaper between the two black shapes.
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
 
         // Bottom edge ← left.
         path.addLine(to: CGPoint(x: rect.minX + tr + br, y: rect.maxY))
