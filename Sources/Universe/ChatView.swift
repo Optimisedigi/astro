@@ -59,7 +59,12 @@ final class ChatState: ObservableObject {
     /// is up, so the user can just start talking.
     func panelDidOpen() {
         panelVisible = true
-        guard voiceMode, VoiceService.isAlreadyAuthorized else { return }
+        guard voiceMode else { return }
+        // Load the Kokoro model now, off the main thread. Otherwise the first
+        // sentence of the first reply pays for the model load, which is long
+        // enough that streaming looks like it never started.
+        KokoroManager.shared.prewarm()
+        guard VoiceService.isAlreadyAuthorized else { return }
         wireUtteranceHandler()
         try? voice.startListening()
     }
@@ -104,6 +109,7 @@ final class ChatState: ObservableObject {
 
     func enableVoiceMode() {
         voiceMode = true
+        KokoroManager.shared.prewarm()
         wireUtteranceHandler()
         Task {
             guard await voice.requestPermissions() else {
