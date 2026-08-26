@@ -18,6 +18,8 @@ struct DiaryListView: View {
     @State private var editDraft = ""
     @State private var errorMessage: String?
     @State private var isFormatting = false
+    /// The saved entry currently being formatted, so only its row shows a spinner.
+    @State private var formattingEntry: UUID?
 
     private let voice = VoiceService.shared
 
@@ -133,6 +135,7 @@ struct DiaryListView: View {
                         DiaryEntryRow(
                             entry: entry,
                             isEditing: editingEntry == entry.id,
+                            isFormatting: formattingEntry == entry.id,
                             editDraft: $editDraft,
                             onEdit: {
                                 editDraft = entry.text
@@ -143,6 +146,7 @@ struct DiaryListView: View {
                                 editingEntry = nil
                             },
                             onCancel: { editingEntry = nil },
+                            onFormat: { formatEntry(entry, dayKey: day.date) },
                             onDelete: { store.deleteEntry(dayKey: day.date, entryID: entry.id) }
                         )
                     }
@@ -182,6 +186,22 @@ struct DiaryListView: View {
 
     private func toggleDictation() {
         isDictating ? stopDictation() : startDictation()
+    }
+
+    /// Tidies an entry that is already saved, writing the result back in place.
+    private func formatEntry(_ entry: DiaryEntry, dayKey: String) {
+        guard formattingEntry == nil else { return }
+        errorMessage = nil
+        formattingEntry = entry.id
+        Task {
+            do {
+                let formatted = try await DiaryFormatter.format(entry.text)
+                store.updateEntry(dayKey: dayKey, entryID: entry.id, text: formatted)
+            } catch {
+                errorMessage = "Could not format: \(error.localizedDescription)"
+            }
+            formattingEntry = nil
+        }
     }
 
     /// Sends the draft to the model to be tidied up. The only path by which
@@ -284,10 +304,12 @@ struct DiaryListView: View {
 struct DiaryEntryRow: View {
     let entry: DiaryEntry
     let isEditing: Bool
+    let isFormatting: Bool
     @Binding var editDraft: String
     var onEdit: () -> Void
     var onSave: () -> Void
     var onCancel: () -> Void
+    var onFormat: () -> Void
     var onDelete: () -> Void
 
     @State private var isHovered = false
@@ -327,6 +349,19 @@ struct DiaryEntryRow: View {
                 .foregroundStyle(.secondary)
                 .opacity(isHovered ? 1 : 0.25)
                 .accessibilityLabel("Edit entry")
+
+                if isFormatting {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button(action: onFormat) {
+                        Image(systemName: "wand.and.stars").font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .opacity(isHovered ? 1 : 0.25)
+                    .help("Send this entry to the AI model to tidy it up")
+                    .accessibilityLabel("Format entry")
+                }
 
                 Button(action: onDelete) {
                     Image(systemName: "trash").font(.caption)
