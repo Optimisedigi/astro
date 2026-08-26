@@ -11,7 +11,7 @@ final class ChatState: ObservableObject {
     let store = SessionStore()
     /// Smooths lumpy token bursts into steady typing.
     private let queue = CharacterQueue()
-    let voice = VoiceService()
+    let voice = VoiceService.shared
     let speech = SpeechService.shared
     let permissions = PermissionsChecker()
     let login = LoginModel()
@@ -67,8 +67,10 @@ final class ChatState: ObservableObject {
     }
 
     private func wireUtteranceHandler() {
-        voice.onUtterance = { [weak self] text in
-            self?.input = text
+        voice.onCaptureComplete = { [weak self] text in
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            self?.input = trimmed
             self?.send()
         }
     }

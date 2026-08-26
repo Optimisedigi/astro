@@ -1,39 +1,102 @@
 import AVFoundation
+import os
 import Speech
 
-/// Voice input: SFSpeechRecognizer + AVAudioEngine with RMS adaptive silence detection
-/// (SPEC.md §6 — noiseFloorRMS / silenceWindow / speechBoostFactor mirror Tama's VoiceService).
+private let logger = Logger(
+    subsystem: "com.universe.app",
+    category: "voice"
+)
+
+extension AVAuthorizationStatus {
+    var description: String {
+        switch self {
+        case .notDetermined: "not determined"
+        case .restricted: "restricted"
+        case .denied: "denied"
+        case .authorized: "authorized"
+        @unknown default: "unknown (\(rawValue))"
+        }
+    }
+}
+
+extension SFSpeechRecognizerAuthorizationStatus {
+    var description: String {
+        switch self {
+        case .notDetermined: "not determined"
+        case .denied: "denied"
+        case .restricted: "restricted"
+        case .authorized: "authorized"
+        @unknown default: "unknown (\(rawValue))"
+        }
+    }
+}
+
+/// Mic capture with Apple Voice Processing (AEC), optional system mute, and
+/// dual-idle silence detection — same path as tama-agent's VoiceService.
 @MainActor
-final class VoiceService: NSObject, ObservableObject {
-    @Published var isListening = false
-    @Published var transcript = ""
+final class VoiceService: ObservableObject {
+    static let shared = VoiceService()
 
-    /// Fires once when the user finishes speaking (silence detected) with the final transcript.
-    var onUtterance: ((String) -> Void)?
+    /// Private so a second engine can never open the mic in parallel with the
+    /// shared one — two AVAudioEngines on the same input fight and gate audio.
+    private init() {}
 
-    private let recognizer = SFSpeechRecognizer()
-    private let engine = AVAudioEngine()
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
-
-    // Silence detection state
-    private var noiseFloorRMS: Float = 0.0005
-    private let speechBoostFactor: Float = 3.0
-    private let silenceWindow: TimeInterval = 1.2
-    private var hasSpoken = false
-    private var lastSpeechAt = Date.distantPast
+    enum State: Sendable {
+        case idle
+        /// Engine + VP running, tap installed, but no recognition task attached
+        /// yet. Used to warm up Apple's Voice Processing IO so the AEC has time
+        /// to adapt before the user starts speaking.
+        case prewarming
+        case followUp
+    }
 
     enum VoiceError: LocalizedError {
         case notAuthorized, recognizerUnavailable, noMic
 
         var errorDescription: String? {
             switch self {
-            case .notAuthorized: return "Microphone/Speech permission not granted. Enable in System Settings > Privacy & Security."
-            case .recognizerUnavailable: return "Speech recognizer unavailable."
-            case .noMic: return "Could not access microphone."
+            case .notAuthorized:
+                "Microphone/Speech permission not granted. Enable in System Settings > Privacy & Security."
+            case .recognizerUnavailable:
+                "Speech recognizer unavailable."
+            case .noMic:
+                "Could not access microphone."
             }
         }
     }
+
+    private(set) var state: State = .idle
+    @Published var isListening = false
+    @Published var transcript = ""
+
+    /// Fires once per utterance after silence, with the final transcript
+    /// (possibly empty). Single slot on purpose: chat and call share this one
+    /// service, so two live handlers would send the same utterance twice.
+    var onCaptureComplete: ((String) -> Void)?
+    var onAudioLevelChanged: ((Double) -> Void)?
+    var onPartialTranscript: ((String) -> Void)?
+    var onError: ((String) -> Void)?
+    var onFirstSpeech: (() -> Void)?
+
+    private var audioEngine: AVAudioEngine?
+    private var speechRecognizer: SFSpeechRecognizer?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private var generation: Int = 0
+    private var capturedTranscript = ""
+
+    private let minSpeechRMS: Double = 5e-4
+    private let speechBoostFactor: Double = 3.0
+    private var noiseFloorRMS: Double = 1e-4
+    private var didMuteThisSession = false
+    private let defaultSilenceWindow: TimeInterval = 1.0
+    private var silenceWindow: TimeInterval = 1.0
+    private var hasSpoken = false
+    private var firstSpeechFired = false
+    private var lastHeard: Date?
+    private var lastTranscriptUpdate: Date?
+    private var silenceTimer: Timer?
+    private var prewarmedVoiceProcessing: Bool = false
 
     /// True when speech recognition and the microphone are both already granted,
     /// so listening can resume silently on launch without raising a prompt.
@@ -50,102 +113,322 @@ final class VoiceService: NSObject, ObservableObject {
         return await AVCaptureDevice.requestAccess(for: .audio)
     }
 
+    /// Chat-panel listen: AEC on, no system mute (TTS may still be wrapping up),
+    /// default 1.0s dual-idle silence so dictation isn't clipped.
     func startListening() throws {
-        guard !isListening else { return }
-        guard let recognizer, recognizer.isAvailable else { throw VoiceError.recognizerUnavailable }
-        MenuBarMood.shared.setActivity(.listening)
+        guard Self.isAlreadyAuthorized else { throw VoiceError.notAuthorized }
+        startFollowUpCapture(muteAudio: false, voiceProcessing: true, silenceDuration: 1.0)
+        if state != .followUp { throw VoiceError.noMic }
+    }
 
+    func stopListening() {
+        stopFollowUpCapture()
+    }
+
+    /// Starts capturing speech for hold-to-talk or follow-up prompts.
+    /// - Parameters:
+    ///   - muteAudio: When `true`, mutes system audio so music/dings aren't heard as speech.
+    ///   - voiceProcessing: When `true`, enables Apple AEC on the input node.
+    ///   - silenceDuration: Override the silence window. `nil` uses 1.0s.
+    func startFollowUpCapture(
+        muteAudio: Bool = true,
+        voiceProcessing: Bool = false,
+        silenceDuration: TimeInterval? = nil
+    ) {
+        let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        guard micStatus == .authorized else {
+            logger.warning("Cannot start speech capture — microphone permission: \(micStatus.description)")
+            onError?(VoiceError.notAuthorized.localizedDescription)
+            return
+        }
+        let speechStatus = SFSpeechRecognizer.authorizationStatus()
+        guard speechStatus == .authorized else {
+            logger.warning("Cannot start speech capture — speech permission: \(speechStatus.description)")
+            onError?(VoiceError.notAuthorized.localizedDescription)
+            return
+        }
+
+        logger.info("Starting speech capture")
+
+        let canReusePrewarm = state == .prewarming && prewarmedVoiceProcessing == voiceProcessing && audioEngine != nil
+        if !canReusePrewarm {
+            generation += 1
+            haltPipeline()
+        }
+
+        silenceWindow = silenceDuration ?? defaultSilenceWindow
+        state = .followUp
+        isListening = true
+        MenuBarMood.shared.setActivity(.listening)
+        capturedTranscript = ""
         transcript = ""
         hasSpoken = false
-        lastSpeechAt = .distantPast
+        firstSpeechFired = false
+        lastHeard = Date()
+        lastTranscriptUpdate = nil
+
+        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        recognizer?.defaultTaskHint = .dictation
+        speechRecognizer = recognizer
+
+        guard let speechRecognizer, speechRecognizer.isAvailable else {
+            logger.error("Speech recognizer not available")
+            haltPipeline()
+            state = .idle
+            isListening = false
+            onError?(VoiceError.recognizerUnavailable.localizedDescription)
+            return
+        }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+        request.requiresOnDeviceRecognition = false
+        request.taskHint = .dictation
+        request.addsPunctuation = false
         recognitionRequest = request
 
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            Task { @MainActor in
-                if let result {
-                    self.transcript = result.bestTranscription.formattedString
+        if muteAudio {
+            SystemAudioMuter.muteSystemOutput()
+            didMuteThisSession = true
+        } else {
+            didMuteThisSession = false
+        }
+
+        if !canReusePrewarm {
+            guard setupCaptureEngine(voiceProcessing: voiceProcessing) else {
+                state = .idle
+                isListening = false
+                return
+            }
+        } else {
+            logger.info("Reusing prewarmed capture engine (VP already adapted)")
+        }
+
+        let currentGeneration = generation
+
+        recognitionTask = speechRecognizer.recognitionTask(
+            with: request
+        ) { [weak self] result, _ in
+            let nextTranscript = result?.bestTranscription.formattedString
+            let isFinal = result?.isFinal ?? false
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == currentGeneration else { return }
+                guard self.state == .followUp else { return }
+
+                if let nextTranscript, !nextTranscript.isEmpty {
+                    let changed = nextTranscript != self.capturedTranscript
+                    self.capturedTranscript = nextTranscript
+                    self.transcript = nextTranscript
+                    self.hasSpoken = true
+                    if changed {
+                        self.lastTranscriptUpdate = Date()
+                    }
+                    self.onPartialTranscript?(nextTranscript)
                 }
-                if error != nil || (result?.isFinal ?? false) {
-                    self.finishUtterance()
+
+                if isFinal {
+                    self.finalize()
                 }
             }
         }
 
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            request.append(buffer)
-            self?.measure(buffer)
+        startSilenceMonitor()
+        logger.info("Speech capture started (generation: \(currentGeneration))")
+    }
+
+    /// Starts the audio engine with Voice Processing enabled but without
+    /// attaching a speech recognizer so AEC can adapt during TTS playback.
+    func prewarmCapture(voiceProcessing: Bool = true) {
+        guard state != .followUp else { return }
+        if state == .prewarming, prewarmedVoiceProcessing == voiceProcessing, audioEngine != nil {
+            return
+        }
+
+        let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        guard micStatus == .authorized else {
+            logger.info("Skipping prewarm — microphone permission: \(micStatus.description)")
+            return
+        }
+
+        logger.info("Prewarming capture engine (VP=\(voiceProcessing))")
+        generation += 1
+        haltPipeline()
+
+        guard setupCaptureEngine(voiceProcessing: voiceProcessing) else { return }
+        state = .prewarming
+        prewarmedVoiceProcessing = voiceProcessing
+    }
+
+    func stopFollowUpCapture() {
+        guard state == .followUp || state == .prewarming else { return }
+        logger.info("Stopping speech capture (was \(String(describing: self.state)))")
+        generation += 1
+        haltPipeline()
+        state = .idle
+        isListening = false
+        if MenuBarMood.shared.mood == .listening { MenuBarMood.shared.setActivity(nil) }
+    }
+
+    private func setupCaptureEngine(voiceProcessing: Bool) -> Bool {
+        let engine = AVAudioEngine()
+        audioEngine = engine
+
+        let inputNode = engine.inputNode
+
+        if voiceProcessing {
+            do {
+                try inputNode.setVoiceProcessingEnabled(true)
+                logger.info("Voice processing (AEC) enabled on input node")
+            } catch {
+                logger.error("Failed to enable voice processing: \(error.localizedDescription)")
+            }
+        }
+
+        let hwFormat = inputNode.outputFormat(forBus: 0)
+        logger.info("Input node format: \(hwFormat.sampleRate)Hz, \(hwFormat.channelCount)ch")
+
+        guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+            logger.error("Invalid audio format")
+            audioEngine = nil
+            return false
+        }
+
+        let recordingFormat: AVAudioFormat = if voiceProcessing, hwFormat.channelCount > 1,
+                                                let mono = AVAudioFormat(
+                                                    standardFormatWithSampleRate: hwFormat.sampleRate,
+                                                    channels: 1
+                                                )
+        {
+            mono
+        } else {
+            hwFormat
+        }
+
+        if recordingFormat !== hwFormat {
+            logger.info("Using mono tap format: \(recordingFormat.sampleRate)Hz, \(recordingFormat.channelCount)ch")
+        }
+
+        inputNode.removeTap(onBus: 0)
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 2048,
+            format: recordingFormat
+        ) { [weak self] buffer, _ in
+            self?.recognitionRequest?.append(buffer)
+            guard let rms = Self.calculateRMS(buffer: buffer) else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.state == .followUp else { return }
+                self.noteAudioLevel(rms: rms)
+                let threshold = max(self.minSpeechRMS, self.noiseFloorRMS * self.speechBoostFactor)
+                self.onAudioLevelChanged?(min(1.0, max(0.0, rms / threshold)))
+            }
         }
 
         engine.prepare()
         do {
             try engine.start()
         } catch {
-            throw VoiceError.noMic
+            logger.error("Failed to start audio engine: \(error.localizedDescription)")
+            onError?(VoiceError.noMic.localizedDescription)
+            audioEngine = nil
+            return false
         }
-        isListening = true
-        watchForSilence()
+        return true
     }
 
-    func stopListening() {
+    private func finalize() {
+        guard state == .followUp else { return }
+        let text = capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = text.split { $0.isWhitespace }.count
+        logger.info("Speech capture finalized — \(words) words, \(text.count) chars")
+
+        haltPipeline()
+        state = .idle
         isListening = false
         if MenuBarMood.shared.mood == .listening { MenuBarMood.shared.setActivity(nil) }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        recognitionRequest?.endAudio()
-        recognitionRequest = nil
-        recognitionTask?.cancel()
-        recognitionTask = nil
+        capturedTranscript = ""
+        hasSpoken = false
+        firstSpeechFired = false
+        lastTranscriptUpdate = nil
+
+        onCaptureComplete?(text)
     }
 
-    /// RMS measurement — speech detected when level exceeds noiseFloor * speechBoostFactor.
-    nonisolated private func measure(_ buffer: AVAudioPCMBuffer) {
-        guard let samples = buffer.floatChannelData?[0] else { return }
-        let count = Int(buffer.frameLength)
-        guard count > 0 else { return }
-        var rms: Float = 0
-        for i in 0..<count { rms += samples[i] * samples[i] }
-        rms = sqrt(rms / Float(count))
-
-        Task { @MainActor in
-            if !self.hasSpoken {
-                // Calibrate noise floor from the first buffers, then listen for speech
-                self.noiseFloorRMS = max(self.noiseFloorRMS * 0.95 + rms * 0.05, 0.0005)
-                if rms > self.noiseFloorRMS * self.speechBoostFactor {
-                    self.hasSpoken = true
-                    self.lastSpeechAt = Date()
-                }
-            } else if rms > self.noiseFloorRMS * self.speechBoostFactor {
-                self.lastSpeechAt = Date()
-            }
-        }
-    }
-
-    private func watchForSilence() {
-        Task {
-            while isListening {
-                try? await Task.sleep(for: .milliseconds(100))
-                guard isListening else { return }
-                if hasSpoken, Date().timeIntervalSince(lastSpeechAt) > silenceWindow {
-                    finishUtterance()
+    /// Auto-finalizes when both RMS and transcript updates have been idle
+    /// for `silenceWindow`. Prevents cutting off natural pauses.
+    private func startSilenceMonitor() {
+        silenceTimer?.invalidate()
+        silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.state == .followUp else {
+                    self?.silenceTimer?.invalidate()
+                    self?.silenceTimer = nil
                     return
                 }
+                guard self.hasSpoken, let lastAudio = self.lastHeard else { return }
+
+                let now = Date()
+                let audioSilent = now.timeIntervalSince(lastAudio) >= self.silenceWindow
+                let transcriptIdle: Bool = if let lastUpdate = self.lastTranscriptUpdate {
+                    now.timeIntervalSince(lastUpdate) >= self.silenceWindow
+                } else {
+                    false
+                }
+
+                if audioSilent, transcriptIdle {
+                    self.finalize()
+                }
             }
         }
     }
 
-    private func finishUtterance() {
-        let final = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        stopListening()
-        if !final.isEmpty { onUtterance?(final) }
+    private func haltPipeline() {
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine?.stop()
+        audioEngine = nil
+        prewarmedVoiceProcessing = false
+
+        speechRecognizer = nil
+
+        if didMuteThisSession {
+            SystemAudioMuter.unmuteSystemOutput()
+            didMuteThisSession = false
+        }
+    }
+
+    private func noteAudioLevel(rms: Double) {
+        let alpha: Double = rms < noiseFloorRMS ? 0.08 : 0.01
+        noiseFloorRMS = max(1e-7, noiseFloorRMS + (rms - noiseFloorRMS) * alpha)
+
+        let threshold = max(minSpeechRMS, noiseFloorRMS * speechBoostFactor)
+        if rms >= threshold {
+            lastHeard = Date()
+            if !firstSpeechFired {
+                firstSpeechFired = true
+                onFirstSpeech?()
+            }
+        }
+    }
+
+    private static func calculateRMS(buffer: AVAudioPCMBuffer) -> Double? {
+        guard let channelData = buffer.floatChannelData else { return nil }
+        let channelDataValue = channelData.pointee
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return nil }
+
+        var sum: Float = 0
+        for i in 0 ..< frameLength {
+            let sample = channelDataValue[i]
+            sum += sample * sample
+        }
+        return Double(sqrt(sum / Float(frameLength)))
     }
 }
-
-// Voice output lives in SpeechService.swift — Kokoro TTS, the same engine and
-// voice set as tama-agent.

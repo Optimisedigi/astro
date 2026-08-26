@@ -182,53 +182,8 @@ extension ClaudeService {
 
 // SpeechService owns its own `shared` instance and callbacks (SpeechService.swift).
 
-@MainActor
-private enum _VoiceServiceHolder {
-    static let instance = VoiceService()
-    static var onCaptureComplete: ((String) -> Void)?
-    static var onPartialTranscript: ((String) -> Void)?
-    static var onAudioLevelChanged: ((Double) -> Void)?
-    static var onError: ((String) -> Void)?
-    static var onFirstSpeech: (() -> Void)?
-}
-extension VoiceService {
-    /// Tama's CallSession accesses VoiceService.shared; Universe stores it on ChatState.
-    @MainActor
-    static var shared: VoiceService { _VoiceServiceHolder.instance }
-
-    static var onCaptureComplete: ((String) -> Void)? {
-        get { _VoiceServiceHolder.onCaptureComplete }
-        set { _VoiceServiceHolder.onCaptureComplete = newValue }
-    }
-    static var onPartialTranscript: ((String) -> Void)? {
-        get { _VoiceServiceHolder.onPartialTranscript }
-        set { _VoiceServiceHolder.onPartialTranscript = newValue }
-    }
-    static var onAudioLevelChanged: ((Double) -> Void)? {
-        get { _VoiceServiceHolder.onAudioLevelChanged }
-        set { _VoiceServiceHolder.onAudioLevelChanged = newValue }
-    }
-    static var onError: ((String) -> Void)? {
-        get { _VoiceServiceHolder.onError }
-        set { _VoiceServiceHolder.onError = newValue }
-    }
-    static var onFirstSpeech: (() -> Void)? {
-        get { _VoiceServiceHolder.onFirstSpeech }
-        set { _VoiceServiceHolder.onFirstSpeech = newValue }
-    }
-
-    func prewarmCapture(voiceProcessing: Bool) {
-        // Voice processing prewarming is a later optimization.
-    }
-
-    func startFollowUpCapture(muteAudio: Bool, voiceProcessing: Bool, silenceDuration: Double) {
-        try? startListening()
-    }
-
-    func stopFollowUpCapture() {
-        stopListening()
-    }
-}
+// VoiceService owns its own `shared` instance, callbacks, AEC prewarm and
+// capture lifecycle (VoiceService.swift) — no compatibility shim needed.
 
 // MARK: - ToolRegistry extension for call mode
 

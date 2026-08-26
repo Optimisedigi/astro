@@ -162,32 +162,32 @@ final class CallSession {
     private func setupVoiceCallbacks() {
         let voice = VoiceService.shared
 
-        VoiceService.onCaptureComplete = { [weak self] text in
+        voice.onCaptureComplete = { [weak self] text in
             logger.info("[VOICE] onCaptureComplete — length=\(text.count)")
             Task { @MainActor [weak self] in
                 self?.handleCaptureComplete(text)
             }
         }
 
-        VoiceService.onPartialTranscript = { partial in
+        voice.onPartialTranscript = { partial in
             logger.debug("[VOICE] partial: \"\(partial.prefix(60))\"")
         }
 
-        VoiceService.onAudioLevelChanged = { level in
+        voice.onAudioLevelChanged = { level in
             NotchCallTimer.setAudioLevel(level)
         }
 
-        VoiceService.onError = { errorMessage in
+        voice.onError = { errorMessage in
             logger.error("[VOICE] Error: \(errorMessage)")
         }
     }
 
     private func clearVoiceCallbacks() {
         let voice = VoiceService.shared
-        VoiceService.onCaptureComplete = nil
-        VoiceService.onPartialTranscript = nil
-        VoiceService.onAudioLevelChanged = nil
-        VoiceService.onError = nil
+        voice.onCaptureComplete = nil
+        voice.onPartialTranscript = nil
+        voice.onAudioLevelChanged = nil
+        voice.onError = nil
     }
 
     /// Start listening for user speech.
@@ -215,7 +215,7 @@ final class CallSession {
     /// CallMetrics accumulator can record each phase's timing. Installed once
     /// per call start; cleared in `end()`.
     private func installMetricsHooks() {
-        VoiceService.onFirstSpeech = { [weak self] in
+        VoiceService.shared.onFirstSpeech = { [weak self] in
             Task { @MainActor [weak self] in
                 self?.metrics.noteFirstSpeech()
             }
@@ -235,7 +235,7 @@ final class CallSession {
     }
 
     private func clearMetricsHooks() {
-        VoiceService.onFirstSpeech = nil
+        VoiceService.shared.onFirstSpeech = nil
         SpeechService.shared.onFirstChunkEnqueued = nil
         SpeechService.shared.onFirstAudioReady = nil
         SpeechService.shared.onFirstAudioPlayback = nil
