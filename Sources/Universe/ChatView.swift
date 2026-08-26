@@ -380,13 +380,18 @@ struct ChatView: View {
     }
 
     private var inputRow: some View {
-        HStack(spacing: 10) {
+        // Top-aligned so the mascot and mic stay put as the text grows downward.
+        HStack(alignment: .top, spacing: 10) {
             MascotBadge()
 
-            TextField("Ask anything…", text: $state.input)
+            // Wraps instead of truncating: live dictation writes a whole
+            // utterance in here, and a single line hid everything but the tail.
+            // Capped at 5 lines so a long ramble scrolls rather than swallowing
+            // the panel.
+            TextField("Ask anything…", text: $state.input, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 26, weight: .light))
-                .lineLimit(1)
+                .lineLimit(1 ... 5)
                 .onSubmit { state.send() }
                 .onChange(of: state.input) { _, _ in MascotController.shared.notifyKeystroke() }
 
@@ -397,9 +402,11 @@ struct ChatView: View {
             }
             .buttonStyle(.plain)
             .help("Toggle voice mode")
+            // Keep the mic centred on the first line as the field grows.
+            .frame(height: 40)
         }
         .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 24))
-        .frame(height: 58)
+        .frame(minHeight: 58)
     }
 
     private var transcript: some View {
