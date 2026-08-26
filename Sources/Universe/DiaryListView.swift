@@ -17,17 +17,22 @@ struct DiaryListView: View {
     @State private var editingEntry: UUID?
     @State private var editDraft = ""
     @State private var errorMessage: String?
+    @State private var isFormatting = false
 
     private let voice = VoiceService.shared
 
     var body: some View {
         VStack(spacing: 0) {
             composer
-            Divider()
-            if store.days.isEmpty {
-                emptyState
-            } else {
-                pages
+            // While writing, the composer takes the whole pane so a long entry
+            // stays visible instead of scrolling out of a few lines.
+            if !isComposing {
+                Divider()
+                if store.days.isEmpty {
+                    emptyState
+                } else {
+                    pages
+                }
             }
         }
         .onAppear(perform: consumeAutoStart)
@@ -45,30 +50,64 @@ struct DiaryListView: View {
 
     // MARK: - Composer
 
+    /// True once there is something being written or dictated.
+    private var isComposing: Bool {
+        isDictating || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hasDraft: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var composer: some View {
-        VStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
-                TextField("What happened today?", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 15))
-                    .lineLimit(1 ... 6)
-                    .onSubmit(commitDraft)
-
-                Button(action: toggleDictation) {
-                    Image(systemName: isDictating ? "mic.fill" : "mic")
-                        .font(.system(size: 14))
-                        .foregroundStyle(isDictating ? Color.red : .secondary)
+                // A ScrollView keeps the newest words in view once the entry is
+                // longer than the pane; a plain growing field would push them off
+                // the bottom.
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        TextField("What happened today?", text: $draft, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 15))
+                            .onSubmit(commitDraft)
+                            .id(Self.draftAnchor)
+                    }
+                    .onChange(of: draft) { _, _ in
+                        guard isDictating else { return }
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo(Self.draftAnchor, anchor: .bottom)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
-                .help(isDictating ? "Stop dictating" : "Dictate an entry")
-                .frame(height: 22)
 
-                Button("Save", action: commitDraft)
+                VStack(spacing: 8) {
+                    Button(action: toggleDictation) {
+                        Image(systemName: isDictating ? "mic.fill" : "mic")
+                            .font(.system(size: 14))
+                            .foregroundStyle(isDictating ? Color.red : .secondary)
+                    }
                     .buttonStyle(.plain)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(draft.isEmpty ? .tertiary : .secondary)
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .frame(height: 22)
+                    .help(isDictating ? "Stop dictating" : "Dictate an entry")
+
+                    if isFormatting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button("Format", action: formatDraft)
+                            .buttonStyle(.plain)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(hasDraft ? .secondary : .tertiary)
+                            .disabled(!hasDraft || isDictating)
+                            .help("Send this entry to the AI model to tidy it up")
+                    }
+
+                    Button("Save", action: commitDraft)
+                        .buttonStyle(.plain)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(hasDraft ? .secondary : .tertiary)
+                        .disabled(!hasDraft)
+                }
+                .frame(width: 52)
             }
 
             if let errorMessage {
@@ -80,7 +119,10 @@ struct DiaryListView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .frame(maxHeight: isComposing ? .infinity : 120)
     }
+
+    private static let draftAnchor = "diary-draft"
 
     private var pages: some View {
         ScrollView {
@@ -117,7 +159,7 @@ struct DiaryListView: View {
                 .foregroundStyle(.tertiary)
             Text("No diary entries yet")
                 .font(.headline)
-            Text("Write or dictate an entry. Diary entries stay on this Mac and are never sent to a model.")
+            Text("Write or dictate an entry. Entries are stored only on this Mac — nothing is sent to a model unless you press Format.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -140,6 +182,25 @@ struct DiaryListView: View {
 
     private func toggleDictation() {
         isDictating ? stopDictation() : startDictation()
+    }
+
+    /// Sends the draft to the model to be tidied up. The only path by which
+    /// diary text leaves this Mac, and it never runs on its own.
+    private func formatDraft() {
+        let original = draft
+        guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        errorMessage = nil
+        isFormatting = true
+        Task {
+            do {
+                let formatted = try await DiaryFormatter.format(original)
+                // Only replace if the user has not carried on writing meanwhile.
+                if draft == original { draft = formatted }
+            } catch {
+                errorMessage = "Could not format: \(error.localizedDescription)"
+            }
+            isFormatting = false
+        }
     }
 
     private func startDictation() {

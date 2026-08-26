@@ -735,13 +735,14 @@ enum SelfTest {
         }
         check(reloaded.day(for: yesterday) == nil, "diary: emptied day is removed")
 
-        // The whole point: the diary must never reach a model.
+        // The whole point: the diary never reaches a model on its own. Pressing
+        // Format sends one entry deliberately; nothing else does.
         let memoryScratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("universe-selftest-diarymem-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: memoryScratch) }
         let memory = MemoryStore(storageURL: memoryScratch)
         check(!memory.promptContext().contains("first thing"),
-              "diary: entries never appear in the model prompt")
+              "diary: entries are never injected into the model prompt")
     }
 
     /// Long-term memory: facts, soul, budgets and prompt injection. Runs against
