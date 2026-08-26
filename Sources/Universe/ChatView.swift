@@ -12,24 +12,55 @@ final class ChatState: ObservableObject {
     /// Smooths lumpy token bursts into steady typing.
     private let queue = CharacterQueue()
     let voice = VoiceService()
-    @Published var speech = SpeechService()
+    let speech = SpeechService.shared
     let permissions = PermissionsChecker()
     let login = LoginModel()
     /// Set by the menubar menu to open one of the settings sheets.
     @Published var requestedSheet: SettingsSheetKind?
-    @Published var voiceMode = false
+
+    /// Persisted so the talk-and-listen choice survives a relaunch (Tama keeps
+    /// the same flag on KokoroManager; we mirror it there so speech output and
+    /// microphone capture stay in step).
+    @Published var voiceMode: Bool = KokoroManager.shared.voiceEnabled {
+        didSet { KokoroManager.shared.voiceEnabled = voiceMode }
+    }
 
     /// No Claude session and no API key: the user cannot ask anything yet.
     var needsSignIn: Bool {
         !AnthropicOAuth.isSignedIn && (KeychainHelper.get(account: "anthropic")?.isEmpty ?? true)
     }
 
-    func enableVoiceMode() {
-        voiceMode = true
+    /// Voice mode only comes back if the user left it on AND the microphone is
+    /// already authorised — launching must never raise a permission prompt.
+    static func shouldRestoreVoiceMode(saved: Bool, micAuthorized: Bool) -> Bool {
+        saved && micAuthorized
+    }
+
+    init() {
+        guard voiceMode else { return }
+        guard Self.shouldRestoreVoiceMode(saved: true, micAuthorized: VoiceService.isAlreadyAuthorized) else {
+            // `didSet` never runs for assignments inside `init`, so persist by hand
+            // or the saved flag and the live one drift apart.
+            voiceMode = false
+            KokoroManager.shared.voiceEnabled = false
+            return
+        }
+        // A restored voice mode still needs its utterance handler wired, or the
+        // first thing the user says after a relaunch goes nowhere.
+        wireUtteranceHandler()
+        try? voice.startListening()
+    }
+
+    private func wireUtteranceHandler() {
         voice.onUtterance = { [weak self] text in
             self?.input = text
             self?.send()
         }
+    }
+
+    func enableVoiceMode() {
+        voiceMode = true
+        wireUtteranceHandler()
         Task {
             guard await voice.requestPermissions() else {
                 errorMessage = VoiceService.VoiceError.notAuthorized.localizedDescription

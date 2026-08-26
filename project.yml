@@ -20,10 +20,11 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.universe.app
     CODE_SIGN_STYLE: Automatic
-    CODE_SIGN_IDENTITY: "-"
-    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: NSD8UNQK9J
     GENERATE_INFOPLIST_FILE: NO
     INFOPLIST_FILE: Info.plist
+    CODE_SIGN_ENTITLEMENTS: Universe.entitlements
     SWIFT_VERSION: "5.0"
 targets:
   Universe:
@@ -37,10 +38,13 @@ targets:
         buildPhase: resources
       - path: Resources/avatar_pack.riv
         buildPhase: resources
+      - path: Resources/AppIcon.icns
+        buildPhase: resources
     dependencies:
       - package: RiveRuntime
       - package: kokoro-ios
         product: KokoroSwift
+        embed: true
       - package: mlx-swift
         product: MLX
       - package: MLXUtilsLibrary

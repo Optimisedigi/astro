@@ -65,7 +65,7 @@ enum NotchCallButton {
 
         // Position: overlap into the notch so the wing blends seamlessly.
         let notchLeftX = screenFrame.midX - notchSize.width / 2
-        let originX = notchLeftX - windowWidth + topCornerRadius + 8
+        let originX = notchLeftX - windowWidth
         let originY = screenFrame.maxY - windowHeight
 
         let newPanel = NSPanel(
@@ -420,7 +420,7 @@ enum NotchCallButton {
         let windowWidth = wingWidth
         let windowHeight = notchSize.height
         let notchLeftX = screenFrame.midX - notchSize.width / 2
-        let originX = notchLeftX - windowWidth + topCornerRadius + 8
+        let originX = notchLeftX - windowWidth
         let originY = screenFrame.maxY - windowHeight
         panel.setFrame(NSRect(x: originX, y: originY, width: windowWidth, height: windowHeight), display: true)
     }

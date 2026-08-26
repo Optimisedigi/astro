@@ -239,8 +239,15 @@ final class PermissionsChecker: ObservableObject {
             }
         case .notifications:
             guard Bundle.main.bundleIdentifier != nil else { return }
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
-                Task { @MainActor in await self.refresh() }
+            // LSUIElement apps must be active for the system permission dialog to appear.
+            NSApp.activate(ignoringOtherApps: true)
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                Task { @MainActor in
+                    await self.refresh()
+                    if !granted {
+                        self.openSettings(for: .notifications)
+                    }
+                }
             }
         case .accessibility:
             // Prompts once, then falls through to the pane on later attempts.

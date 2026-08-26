@@ -180,58 +180,7 @@ extension ClaudeService {
 
 // MARK: - Shared instances Tama expects
 
-@MainActor
-private enum _SpeechServiceHolder {
-    static let instance = SpeechService()
-    static var onFirstChunkEnqueued: (() -> Void)?
-    static var onFirstAudioReady: (() -> Void)?
-    static var onFirstAudioPlayback: (() -> Void)?
-    static var onPlaybackGap: ((TimeInterval) -> Void)?
-}
-extension SpeechService {
-    /// Tama's CallSession accesses SpeechService.shared; Universe stores it on ChatState.
-    @MainActor
-    static var shared: SpeechService { _SpeechServiceHolder.instance }
-
-    static var onFirstChunkEnqueued: (() -> Void)? {
-        get { _SpeechServiceHolder.onFirstChunkEnqueued }
-        set { _SpeechServiceHolder.onFirstChunkEnqueued = newValue }
-    }
-    static var onFirstAudioReady: (() -> Void)? {
-        get { _SpeechServiceHolder.onFirstAudioReady }
-        set { _SpeechServiceHolder.onFirstAudioReady = newValue }
-    }
-    static var onFirstAudioPlayback: (() -> Void)? {
-        get { _SpeechServiceHolder.onFirstAudioPlayback }
-        set { _SpeechServiceHolder.onFirstAudioPlayback = newValue }
-    }
-    static var onPlaybackGap: ((TimeInterval) -> Void)? {
-        get { _SpeechServiceHolder.onPlaybackGap }
-        set { _SpeechServiceHolder.onPlaybackGap = newValue }
-    }
-
-    func beginStreaming() { /* Kokoro streaming is a later phase */ }
-    func feedChunk(_ text: String) { speak(text) }
-    func flushBuffer() { /* no-op for system TTS */ }
-    func finishStreaming() async { /* system TTS is synchronous */ }
-
-    var onFirstChunkEnqueued: (() -> Void)? {
-        get { _SpeechServiceHolder.onFirstChunkEnqueued }
-        set { _SpeechServiceHolder.onFirstChunkEnqueued = newValue }
-    }
-    var onFirstAudioReady: (() -> Void)? {
-        get { _SpeechServiceHolder.onFirstAudioReady }
-        set { _SpeechServiceHolder.onFirstAudioReady = newValue }
-    }
-    var onFirstAudioPlayback: (() -> Void)? {
-        get { _SpeechServiceHolder.onFirstAudioPlayback }
-        set { _SpeechServiceHolder.onFirstAudioPlayback = newValue }
-    }
-    var onPlaybackGap: ((TimeInterval) -> Void)? {
-        get { _SpeechServiceHolder.onPlaybackGap }
-        set { _SpeechServiceHolder.onPlaybackGap = newValue }
-    }
-}
+// SpeechService owns its own `shared` instance and callbacks (SpeechService.swift).
 
 @MainActor
 private enum _VoiceServiceHolder {

@@ -61,19 +61,6 @@ final class KokoroManager: ObservableObject {
     // swiftlint:disable:next modifier_order
     private nonisolated static let modelFileName = "kokoro-v1_0.safetensors"
     nonisolated static let sampleRate = KokoroTTS.Constants.samplingRate
-    nonisolated static let minSpeed: Float = 0.8
-    nonisolated static let maxSpeed: Float = 1.3
-    nonisolated static let defaultSpeed: Float = 1.0
-
-    static let availableVoices: [VoiceInfo] = [
-        VoiceInfo(id: "af_heart", name: "Heart", gender: .female, accent: "US English", grade: "A"),
-        VoiceInfo(id: "af_bella", name: "Bella", gender: .female, accent: "US English", grade: "A-"),
-        VoiceInfo(id: "af_sarah", name: "Sarah", gender: .female, accent: "US English", grade: "B"),
-        VoiceInfo(id: "af_aoede", name: "Aoede", gender: .female, accent: "US English", grade: "B"),
-        VoiceInfo(id: "bf_emma", name: "Emma", gender: .female, accent: "British English", grade: "B"),
-        VoiceInfo(id: "af_nicole", name: "Nicole", gender: .female, accent: "US English", grade: "B"),
-    ]
-
     // MARK: - Paths
 
     private var basePath: URL {
@@ -438,7 +425,13 @@ struct VoiceInfo: Identifiable {
 @MainActor
 final class KokoroManager: ObservableObject {
     static let shared = KokoroManager()
-    private init() {}
+
+    private init() {
+        voiceEnabled = UserDefaults.standard.object(forKey: "kokoroVoiceEnabled") as? Bool ?? true
+        selectedVoice = UserDefaults.standard.string(forKey: "kokoroSelectedVoice") ?? "af_heart"
+        let savedSpeed = UserDefaults.standard.object(forKey: "kokoroVoiceSpeed") as? Float ?? Self.defaultSpeed
+        voiceSpeed = min(max(savedSpeed, Self.minSpeed), Self.maxSpeed)
+    }
     var isReady: Bool { false }
     var isDownloaded: Bool { false }
     func prewarm() {}
@@ -454,11 +447,18 @@ final class KokoroManager: ObservableObject {
         let wordTimings: [WordTiming]
     }
     nonisolated static func generateAudioBufferOffMain(text: String, context: GenerationContext) -> GenerationResult? { nil }
-    static let availableVoices: [VoiceInfo] = []
     static let sampleRate: Double = 24000
-    @Published var voiceEnabled = true
-    @Published var selectedVoice = "af_heart"
-    @Published var voiceSpeed: Float = 1.0
+    @Published var voiceEnabled: Bool {
+        didSet { UserDefaults.standard.set(voiceEnabled, forKey: "kokoroVoiceEnabled") }
+    }
+
+    @Published var selectedVoice: String {
+        didSet { UserDefaults.standard.set(selectedVoice, forKey: "kokoroSelectedVoice") }
+    }
+
+    @Published var voiceSpeed: Float {
+        didSet { UserDefaults.standard.set(voiceSpeed, forKey: "kokoroVoiceSpeed") }
+    }
     @Published var modelDownloaded = false
     @Published var modelDownloading = false
     @Published var modelDownloadProgress: Double = 0
@@ -477,3 +477,24 @@ struct VoiceInfo: Identifiable {
 }
 
 #endif
+
+// MARK: - Shared voice catalogue
+
+/// The speed range and voice pack are kept byte-identical to tama-agent's
+/// `KokoroManager` so both apps sound exactly the same.
+extension KokoroManager {
+    nonisolated static var minSpeed: Float { 0.8 }
+    nonisolated static var maxSpeed: Float { 1.3 }
+    nonisolated static var defaultSpeed: Float { 1.0 }
+
+    static var availableVoices: [VoiceInfo] {
+        [
+            VoiceInfo(id: "af_heart", name: "Heart", gender: .female, accent: "US English", grade: "A"),
+            VoiceInfo(id: "af_bella", name: "Bella", gender: .female, accent: "US English", grade: "A-"),
+            VoiceInfo(id: "af_sarah", name: "Sarah", gender: .female, accent: "US English", grade: "B"),
+            VoiceInfo(id: "af_aoede", name: "Aoede", gender: .female, accent: "US English", grade: "B"),
+            VoiceInfo(id: "bf_emma", name: "Emma", gender: .female, accent: "British English", grade: "B"),
+            VoiceInfo(id: "af_nicole", name: "Nicole", gender: .female, accent: "US English", grade: "B"),
+        ]
+    }
+}

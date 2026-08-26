@@ -220,26 +220,26 @@ final class CallSession {
                 self?.metrics.noteFirstSpeech()
             }
         }
-        SpeechService.onFirstChunkEnqueued = { [weak self] in
+        SpeechService.shared.onFirstChunkEnqueued = { [weak self] in
             self?.metrics.noteFirstTTSEnqueue()
         }
-        SpeechService.onFirstAudioReady = { [weak self] in
+        SpeechService.shared.onFirstAudioReady = { [weak self] in
             self?.metrics.noteFirstAudioReady()
         }
-        SpeechService.onFirstAudioPlayback = { [weak self] in
+        SpeechService.shared.onFirstAudioPlayback = { [weak self] in
             self?.metrics.noteFirstAudioPlayback()
         }
-        SpeechService.onPlaybackGap = { [weak self] gap in
+        SpeechService.shared.onPlaybackGap = { [weak self] gap in
             self?.metrics.notePlaybackGap(gap)
         }
     }
 
     private func clearMetricsHooks() {
         VoiceService.onFirstSpeech = nil
-        SpeechService.onFirstChunkEnqueued = nil
-        SpeechService.onFirstAudioReady = nil
-        SpeechService.onFirstAudioPlayback = nil
-        SpeechService.onPlaybackGap = nil
+        SpeechService.shared.onFirstChunkEnqueued = nil
+        SpeechService.shared.onFirstAudioReady = nil
+        SpeechService.shared.onFirstAudioPlayback = nil
+        SpeechService.shared.onPlaybackGap = nil
     }
 
     // MARK: - Speech Handling

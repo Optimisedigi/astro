@@ -263,12 +263,13 @@ enum SelfTest {
         check(!moodState.mood.isActivity, "mood: clearing activity restores time of day")
         check(MenuBarMood.Mood.allCases.count == 10, "mood: all 10 Tama moods present")
 
-        // Speaking drives the talking animation on both mascots.
-        let speech = SpeechService()
-        speech.speak("selftest talking animation")
+        // Speaking drives the talking animation on both mascots. Kokoro synthesis is
+        // asynchronous, so drive the animation hooks the way playback does.
+        MenuBarMood.shared.setActivity(.speaking)
+        MascotController.shared.setState(.responding)
         check(MenuBarMood.shared.mood == .speaking, "talking: menubar enters speaking (mouth animates)")
         check(MascotController.shared.currentState == .responding, "talking: avatar enters responding cycle")
-        speech.stop()
+        SpeechService.shared.stop()
         check(MenuBarMood.shared.mood != .speaking, "talking: menubar leaves speaking on stop")
         check(MascotController.shared.currentState == .idle, "talking: avatar returns to idle on stop")
 
@@ -438,13 +439,39 @@ enum SelfTest {
               "permissions: denied and unknown are never claimed as granted")
         check(checker.outstanding.allSatisfy { !$0.optional }, "permissions: optional rows never block onboarding")
 
-        // Speech rate mapping drives the speed slider.
-        check(SpeechService.rate(for: 1.0) == AVSpeechUtteranceDefaultSpeechRate, "speech: 1x is the system default rate")
-        check(SpeechService.rate(for: 2.0) > SpeechService.rate(for: 1.0), "speech: faster is faster")
-        check(SpeechService.rate(for: 0.5) < SpeechService.rate(for: 1.0), "speech: slower is slower")
-        check(SpeechService.rate(for: 9) <= AVSpeechUtteranceMaximumSpeechRate, "speech: out-of-range speed is clamped high")
-        check(SpeechService.rate(for: -1) >= AVSpeechUtteranceMinimumSpeechRate, "speech: out-of-range speed is clamped low")
-        check(SpeechService.availableVoices.allSatisfy { $0.language.hasPrefix("en") }, "speech: voice list is English only")
+        // Voice output is Kokoro — the same engine and voice pack as tama-agent.
+        let kokoro = KokoroManager.shared
+        check(KokoroManager.minSpeed < KokoroManager.defaultSpeed && KokoroManager.defaultSpeed < KokoroManager.maxSpeed,
+              "speech: Kokoro speed range brackets the default")
+        let restoreSpeed = kokoro.voiceSpeed
+        kokoro.voiceSpeed = 1.15
+        check(UserDefaults.standard.object(forKey: "kokoroVoiceSpeed") as? Float == 1.15,
+              "speech: speaking speed persists across launches")
+        kokoro.voiceSpeed = restoreSpeed
+
+        // Voice mode is the toggle users complained about losing on relaunch.
+        let restoreEnabled = kokoro.voiceEnabled
+        kokoro.voiceEnabled = true
+        check(UserDefaults.standard.object(forKey: "kokoroVoiceEnabled") as? Bool == true,
+              "speech: voice mode persists when switched on")
+        kokoro.voiceEnabled = false
+        check(UserDefaults.standard.object(forKey: "kokoroVoiceEnabled") as? Bool == false,
+              "speech: voice mode persists when switched off")
+        // Constructing a live ChatState would open the microphone, so assert the
+        // restore rule directly instead.
+        check(ChatState.shouldRestoreVoiceMode(saved: true, micAuthorized: true),
+              "speech: voice mode returns when it was on and the mic is granted")
+        check(!ChatState.shouldRestoreVoiceMode(saved: true, micAuthorized: false),
+              "speech: voice mode stays off when the mic is not granted yet")
+        check(!ChatState.shouldRestoreVoiceMode(saved: false, micAuthorized: true),
+              "speech: voice mode stays off when the user left it off")
+        kokoro.voiceEnabled = restoreEnabled
+
+        let restoreVoice = kokoro.selectedVoice
+        kokoro.selectedVoice = "af_bella"
+        check(UserDefaults.standard.string(forKey: "kokoroSelectedVoice") == "af_bella",
+              "speech: chosen voice persists across launches")
+        kokoro.selectedVoice = restoreVoice
     }
 
     static func runOAuthChecks(check: (Bool, String) -> Void) async {

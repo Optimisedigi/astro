@@ -1,9 +1,9 @@
 #!/bin/bash
 # Build Universe and install it into /Applications.
 #
-# The app is ad-hoc signed (CODE_SIGN_IDENTITY "-"), which is fine for running on
-# the machine that built it. It is deliberately not a .dmg: distributing to other
-# Macs needs a Developer ID certificate and notarization, which we do not have.
+# The app is signed with the local Apple Development certificate so macOS TCC
+# (Privacy & Security permissions) recognises it. It is deliberately not a .dmg:
+# distributing to other Macs needs a Developer ID certificate and notarization.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -41,6 +41,9 @@ fi
 echo "==> Installing to $DEST"
 rm -rf "$DEST"
 cp -R "$APP" "$DEST"
+
+# The Xcode build already signs the app with the Apple Development certificate,
+# so the installed copy keeps a stable identity for macOS TCC.
 
 echo
 echo "Installed: $DEST"
