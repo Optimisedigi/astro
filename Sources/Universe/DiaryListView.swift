@@ -7,6 +7,10 @@ import SwiftUI
 struct DiaryListView: View {
     @ObservedObject var store: DiaryStore
 
+    /// Set by the notch pencil button: start dictating as soon as the tab shows,
+    /// so pressing it once is enough to start talking.
+    var autoStartDictation: Binding<Bool>?
+
     /// Voice capture writes here live, exactly like the chat input.
     @State private var draft = ""
     @State private var isDictating = false
@@ -26,7 +30,17 @@ struct DiaryListView: View {
                 pages
             }
         }
+        .onAppear(perform: consumeAutoStart)
+        .onChange(of: autoStartDictation?.wrappedValue ?? false) { _, _ in consumeAutoStart() }
         .onDisappear(perform: stopDictation)
+    }
+
+    /// Honours a pending auto-start request exactly once.
+    private func consumeAutoStart() {
+        guard autoStartDictation?.wrappedValue == true else { return }
+        autoStartDictation?.wrappedValue = false
+        guard !isDictating else { return }
+        startDictation()
     }
 
     // MARK: - Composer

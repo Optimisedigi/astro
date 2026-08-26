@@ -18,6 +18,13 @@ final class ChatState: ObservableObject {
     /// Set by the menubar menu to open one of the settings sheets.
     @Published var requestedSheet: SettingsSheetKind?
 
+    /// Set by the notch pencil button to jump straight to the Diary tab.
+    @Published var requestedTab: Int?
+
+    /// Set alongside `requestedTab` so the diary starts dictating as it appears,
+    /// letting the user press once and talk.
+    @Published var startDiaryDictation = false
+
     /// Persisted so the talk-and-listen choice survives a relaunch (Tama keeps
     /// the same flag on KokoroManager; we mirror it there so speech output and
     /// microphone capture stay in step).
@@ -285,6 +292,9 @@ struct ChatView: View {
     /// Tama's tab set, plus Diary — which is local-only and never reaches a model.
     private let tabLabels = ["Chats", "Diary", "Reminders", "Routines", "Tasks", "Skills", "Tools"]
 
+    /// Index of the Diary tab, so callers outside the view don't hardcode it.
+    static let diaryTabIndex = 1
+
     var body: some View {
         VStack(spacing: 0) {
             // Tama's layout: input row on top, tabs below it, lists under that.
@@ -314,7 +324,7 @@ struct ChatView: View {
                     }
                 }
             case 1:
-                DiaryListView(store: diaryStore)
+                DiaryListView(store: diaryStore, autoStartDictation: $state.startDiaryDictation)
             case 2:
                 RoutineListView(store: schedules, kind: .reminder)
             case 3:
@@ -341,6 +351,11 @@ struct ChatView: View {
             guard let requested else { return }
             sheet = requested
             state.requestedSheet = nil
+        }
+        .onChange(of: state.requestedTab) { _, requested in
+            guard let requested else { return }
+            selectedTab = requested
+            state.requestedTab = nil
         }
         .sheet(item: $sheet) { kind in
             switch kind {

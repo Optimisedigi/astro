@@ -55,6 +55,15 @@ final class PanelController {
         chatState.requestedSheet = kind
     }
 
+    /// Open the panel on the Diary tab and start dictating, for the notch
+    /// pencil button. Deliberately never touches the agent: the transcript goes
+    /// straight into the diary draft.
+    func openDiaryDictation() {
+        show()
+        chatState.requestedTab = ChatView.diaryTabIndex
+        chatState.startDiaryDictation = true
+    }
+
     /// Bring the panel up (idempotent) — used on launch and on reopen.
     func show() {
         // Re-center on the current screen every open (display setups change).

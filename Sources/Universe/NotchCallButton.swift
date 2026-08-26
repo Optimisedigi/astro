@@ -22,6 +22,7 @@ enum NotchCallButton {
     private static var isVisible = false
     private(set) static var isInCall = false
     private static var labelField: NSTextField?
+    private static var pencilField: NSTextField?
 
     /// The live voice call, or nil when idle. Held for the duration of the call
     /// so `endCall()` can shut the same session down.
@@ -32,9 +33,13 @@ enum NotchCallButton {
 
     // MARK: - Constants
 
-    /// Width of the wing extension. Sized to fit just the icon plus corner curvature
+    /// Width of the wing extension. Sized to fit both icons plus corner curvature
     /// with comfortable padding on the left where the bottom-corner flare lives.
-    private static let wingWidth: CGFloat = 60
+    private static let wingWidth: CGFloat = 92
+
+    /// Width of each icon's slot. The pencil sits in the left slot, the phone in
+    /// the right; the click zones divide on the boundary between them.
+    private static let iconSlotWidth: CGFloat = 30
 
     /// The panel is wider than the visible wing: the extra runs to the right,
     /// tucking under the notch's bottom flare. Because `windowWidth` and
@@ -147,16 +152,29 @@ enum NotchCallButton {
         hover.frame = rootView.bounds
         rootView.layer?.addSublayer(hover)
 
-        // Icon centered in the wing's body. The bottom-left flare (bottomCornerRadius)
-        // visually pulls weight to the left, so we offset the icon rightward to balance.
+        // Two icons in the wing's body: pencil (diary) then phone (call). The
+        // bottom-left flare (bottomCornerRadius) visually pulls weight to the
+        // left, so both are offset rightward to balance.
         let labelHeight: CGFloat = 18
         let labelY = (wingHeight - labelHeight) / 2
         let iconLeftPadding: CGFloat = bottomCornerRadius + 6
-        let label = makeLabel()
-        label.frame = NSRect(
+
+        let pencil = makePencilLabel()
+        pencil.frame = NSRect(
             x: iconLeftPadding,
             y: labelY,
-            width: wingWidth - iconLeftPadding - topCornerRadius,
+            width: iconSlotWidth,
+            height: labelHeight
+        )
+        pencil.alphaValue = 0
+        rootView.addSubview(pencil)
+        pencilField = pencil
+
+        let label = makeLabel()
+        label.frame = NSRect(
+            x: iconLeftPadding + iconSlotWidth,
+            y: labelY,
+            width: iconSlotWidth,
             height: labelHeight
         )
         // Start with label invisible for fade-in.
@@ -236,12 +254,11 @@ enum NotchCallButton {
             return
         }
 
-        // Fade out label immediately.
-        if let labelField {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.1
-                labelField.animator().alphaValue = 0
-            }
+        // Fade out both icons immediately.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.1
+            labelField?.animator().alphaValue = 0
+            pencilField?.animator().alphaValue = 0
         }
 
         // Collapse shape back to notch edge.
@@ -294,9 +311,10 @@ enum NotchCallButton {
 
         // Re-run the expand animation so it slides in cleanly.
         let wingHeight = panel.frame.height
-        if let label = labelField {
+        if let label = labelField, let hoverLayer {
             label.alphaValue = 0
-            animateExpand(shapeLayer: shapeLayer, hoverLayer: hoverLayer!, label: label, wingHeight: wingHeight)
+            pencilField?.alphaValue = 0
+            animateExpand(shapeLayer: shapeLayer, hoverLayer: hoverLayer, label: label, wingHeight: wingHeight)
         }
 
         if isInCall { NotchCallTimer.showAfterOverlay() }
@@ -308,16 +326,33 @@ enum NotchCallButton {
         shapeLayer = nil
         hoverLayer = nil
         labelField = nil
+        pencilField = nil
     }
 
-    /// Called when the button is tapped.
-    fileprivate static func handleTap() {
+    /// Called when the button is tapped. `x` is the click position within the
+    /// wing, which decides whether the pencil or the phone was hit.
+    fileprivate static func handleTap(atX x: CGFloat) {
         ButtonSound.shared.play()
+
+        // The pencil occupies the left slot; everything to its right is the
+        // phone, so the wide area tucked under the notch still ends a call.
+        let boundary = bottomCornerRadius + 6 + iconSlotWidth
+        if x < boundary {
+            openDiary()
+            return
+        }
+
         if isInCall {
             endCall()
         } else {
             startCall()
         }
+    }
+
+    /// Open the diary and start dictating — no agent, no model.
+    private static func openDiary() {
+        logger.info("Diary dictation requested from the notch")
+        PanelController.shared.openDiaryDictation()
     }
 
     /// True while the permission prompt is up. `isInCall` is still false then,
@@ -458,12 +493,13 @@ enum NotchCallButton {
             hoverShape.path = expandedPath
         }
 
-        // Fade in label after a short delay.
+        // Fade both icons in after a short delay.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.2
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 label.animator().alphaValue = 1.0
+                pencilField?.animator().alphaValue = 1.0
             }
         }
     }
@@ -543,6 +579,26 @@ enum NotchCallButton {
         return label
     }
 
+    /// The diary pencil, drawn to match the phone icon's weight and colour.
+    private static func makePencilLabel() -> NSTextField {
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        let attachment = NSTextAttachment()
+        if let image = NSImage(
+            systemSymbolName: "pencil",
+            accessibilityDescription: "Write a diary entry"
+        )?.withSymbolConfiguration(config) {
+            attachment.image = image
+        }
+        let string = NSMutableAttributedString(attachment: attachment)
+        string.addAttributes(
+            [.foregroundColor: NSColor.white.withAlphaComponent(0.9)],
+            range: NSRange(location: 0, length: string.length)
+        )
+        let label = NSTextField(labelWithAttributedString: string)
+        label.alignment = .center
+        return label
+    }
+
     /// Build the attributed icon string. Idle: white phone. In-call: red disconnect.
     private static func makeIconString(disconnect: Bool) -> NSAttributedString {
         let symbolName = disconnect ? "phone.down.fill" : "phone.fill"
@@ -608,7 +664,8 @@ private final class CallButtonOverlay: NSView {
         NotchCallButton.setHovered(false)
     }
 
-    override func mouseDown(with _: NSEvent) {
-        NotchCallButton.handleTap()
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        NotchCallButton.handleTap(atX: point.x)
     }
 }
