@@ -97,7 +97,7 @@ struct DiaryListView: View {
                             .buttonStyle(.plain)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(hasDraft ? .secondary : .tertiary)
-                            .disabled(!hasDraft || isDictating)
+                            .disabled(!hasDraft)
                             .help("Send this entry to the AI model to tidy it up")
                     }
 
@@ -187,6 +187,11 @@ struct DiaryListView: View {
     /// Sends the draft to the model to be tidied up. The only path by which
     /// diary text leaves this Mac, and it never runs on its own.
     private func formatDraft() {
+        // Stop dictating first, exactly as saving does. Formatting is something
+        // you reach for when you have finished talking, and leaving the mic open
+        // would let a late transcript overwrite the formatted text.
+        stopDictation()
+
         let original = draft
         guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         errorMessage = nil
