@@ -76,15 +76,22 @@ final class DiaryStore: ObservableObject {
         guard !trimmed.isEmpty else { return false }
         let entry = DiaryEntry(text: String(trimmed.prefix(Self.maxEntryChars)))
 
+        // Write first, then commit to memory. The other way round, a failed
+        // write left the entry on screen but not on disk — and because the UI
+        // keeps the draft on failure, retrying would have stored it twice.
         let key = Self.key(for: date)
         if let index = days.firstIndex(where: { $0.date == key }) {
-            days[index].entries.append(entry)
-            return write(days[index])
+            var day = days[index]
+            day.entries.append(entry)
+            guard write(day) else { return false }
+            days[index] = day
+            return true
         }
         let day = DiaryDay(date: key, entries: [entry])
+        guard write(day) else { return false }
         days.append(day)
         days.sort { $0.date > $1.date }
-        return write(day)
+        return true
     }
 
     func updateEntry(dayKey: String, entryID: UUID, text: String) {
