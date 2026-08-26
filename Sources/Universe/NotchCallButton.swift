@@ -320,15 +320,23 @@ enum NotchCallButton {
         }
     }
 
+    /// True while the permission prompt is up. `isInCall` is still false then,
+    /// so without this a second click would stack another request.
+    private static var isRequestingPermission = false
+
     /// Begin a call — switch icon to red disconnect, show the timer wing, and start the voice session.
     private static func startCall() {
         // Without the microphone the call would greet the user and then listen
         // to nothing, which looks like a hung call. Ask first, and only commit
         // to the call once access is granted.
         guard VoiceService.isAlreadyAuthorized else {
+            guard !isRequestingPermission else { return }
+            isRequestingPermission = true
             logger.info("Call requested without microphone access — requesting")
             Task { @MainActor in
-                guard await VoiceService.shared.requestPermissions() else {
+                let granted = await VoiceService.shared.requestPermissions()
+                isRequestingPermission = false
+                guard granted else {
                     logger.warning("Microphone denied — cannot start call")
                     PanelController.shared.openSheet(.permissions)
                     return
