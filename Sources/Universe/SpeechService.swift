@@ -130,8 +130,37 @@ final class SpeechService {
     /// the LLM to naturally pause mid-sentence without truncation.
     private static let flushDelay: TimeInterval = 0.3
 
+    /// The format `playerNode` is currently connected to the mixer with. A
+    /// buffer whose format differs from this must not be scheduled — the graph
+    /// would reinterpret its samples at the wrong rate, which is what the
+    /// squealing was.
+    private var connectedFormat: AVAudioFormat?
+
     private init() {
         audioEngine.attach(playerNode)
+
+        // When the audio hardware's sample rate or channel count changes, the
+        // engine stops *itself* and posts this notification, leaving the nodes
+        // connected at the old format. Enabling the microphone's Voice
+        // Processing unit is exactly such a change, so a call could retune the
+        // device mid-sentence and leave playback running on a dead graph.
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: audioEngine,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { SpeechService.shared.handleConfigurationChange() }
+        }
+    }
+
+    /// Marks the graph stale so the next buffer reconnects at the new hardware
+    /// format. Any buffer already in flight is abandoned: stopping the player
+    /// fires its completion handler, which advances the queue as usual.
+    private func handleConfigurationChange() {
+        logger.debug("Audio configuration changed — reconnecting on next buffer")
+        engineStarted = false
+        connectedFormat = nil
+        if isPlaying { playerNode.stop() }
     }
 
     /// Whether the service is currently speaking.
@@ -386,6 +415,7 @@ final class SpeechService {
         audioEngine.stop()
         audioEngine.reset()
         engineStarted = false
+        connectedFormat = nil
         logger.debug("Audio engine stopped and reset")
     }
 
@@ -404,8 +434,11 @@ final class SpeechService {
     /// never fires and the stream would hang.
     @discardableResult
     private func ensureEngineRunning(format: AVAudioFormat) -> Bool {
-        if engineStarted { return true }
+        // `engineStarted` alone is not enough: the engine can stop itself on a
+        // hardware change, and the existing connection may be at a stale format.
+        if engineStarted, audioEngine.isRunning, connectedFormat == format { return true }
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: format)
+        connectedFormat = format
         do {
             try audioEngine.start()
             engineStarted = true
