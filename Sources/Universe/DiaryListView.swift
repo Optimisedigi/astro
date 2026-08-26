@@ -323,10 +323,14 @@ struct DiaryEntryRow: View {
 
             if isEditing {
                 VStack(alignment: .leading, spacing: 6) {
+                    // No line cap: a dictated entry runs long, and scrolling a
+                    // tall entry inside an eight-line box means never seeing the
+                    // whole thing at once. The row grows and the tab's own
+                    // scroll view handles the overflow.
                     TextField("", text: $editDraft, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 13))
-                        .lineLimit(1 ... 8)
+                        .fixedSize(horizontal: false, vertical: true)
                         .onSubmit(onSave)
                     HStack(spacing: 8) {
                         Button("Save", action: onSave)
