@@ -130,6 +130,34 @@ final class ChatState: ObservableObject {
 
     func disableVoiceMode() {
         voiceMode = false
+        releaseVoiceHandlers()
+    }
+
+    /// True while another feature (the diary) has borrowed the microphone.
+    private var voiceModeSuspended = false
+
+    /// Hands the microphone to another part of the app without changing the
+    /// user's saved preference.
+    ///
+    /// `disableVoiceMode()` persists `voiceMode`, so using it to get the mic out
+    /// of the way turned chat's voice mode off permanently — it stayed off across
+    /// relaunches. Suspending leaves the preference alone.
+    func suspendVoiceMode() {
+        guard voiceMode else { return }
+        voiceModeSuspended = true
+        releaseVoiceHandlers()
+    }
+
+    /// Gives the microphone back after a suspension, if it was on to begin with.
+    func resumeVoiceModeIfSuspended() {
+        guard voiceModeSuspended else { return }
+        voiceModeSuspended = false
+        guard voiceMode, panelVisible, VoiceService.isAlreadyAuthorized else { return }
+        wireUtteranceHandler()
+        try? voice.startListening()
+    }
+
+    private func releaseVoiceHandlers() {
         voice.onPartialTranscript = nil
         voice.onCaptureComplete = nil
         voice.onError = nil

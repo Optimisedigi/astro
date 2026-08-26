@@ -233,10 +233,9 @@ struct DiaryListView: View {
 
         // VoiceService is one shared instance with one set of callbacks, so
         // taking the microphone here would otherwise hijack chat's handlers and
-        // leave them nil on stop — silently breaking the chat mic. Turn chat
-        // voice mode off first; it unhooks itself cleanly and the user re-arms
-        // it with its own mic button.
-        PanelController.shared.chatState.disableVoiceMode()
+        // leave them nil on stop. Suspend rather than disable: disabling persists
+        // the preference, which switched chat's voice mode off for good.
+        PanelController.shared.chatState.suspendVoiceMode()
 
         // Dictation only — the transcript goes straight into the draft and is
         // never handed to the agent.
@@ -282,6 +281,8 @@ struct DiaryListView: View {
         voice.onPartialTranscript = nil
         voice.onCaptureComplete = nil
         voice.onError = nil
+        // Give the microphone back to chat if it was listening before.
+        PanelController.shared.chatState.resumeVoiceModeIfSuspended()
     }
 
     /// "Today" / "Yesterday" / "Tuesday, 26 August 2026".
