@@ -51,9 +51,14 @@ final class ChatState: ObservableObject {
         wireUtteranceHandler()
     }
 
+    /// Whether the panel is on screen. The microphone may only be open while
+    /// this is true, so the mic indicator tracks the window exactly.
+    private(set) var panelVisible = false
+
     /// The panel became visible. Tama opens the microphone whenever its window
     /// is up, so the user can just start talking.
     func panelDidOpen() {
+        panelVisible = true
         guard voiceMode, VoiceService.isAlreadyAuthorized else { return }
         wireUtteranceHandler()
         try? voice.startListening()
@@ -62,6 +67,7 @@ final class ChatState: ObservableObject {
     /// The panel was dismissed (⌥Space or the menubar). Release the microphone
     /// immediately — a hidden window must never hold the input device open.
     func panelDidClose() {
+        panelVisible = false
         voice.stopListening()
         speech.stop()
     }
@@ -117,10 +123,13 @@ final class ChatState: ObservableObject {
     }
 
     /// Listen again after the spoken reply finishes — keeps the call loop alive.
+    /// Checks `panelVisible` *after* the wait, not before: closing the panel
+    /// mid-reply used to reopen the microphone behind a hidden window, leaving
+    /// the system mic indicator lit until the app quit.
     private func resumeListeningAfterReply() {
         Task {
             while speech.isSpeaking { try? await Task.sleep(for: .milliseconds(200)) }
-            if voiceMode { try? voice.startListening() }
+            if voiceMode, panelVisible { try? voice.startListening() }
         }
     }
 

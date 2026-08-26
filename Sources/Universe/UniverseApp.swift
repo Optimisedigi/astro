@@ -4,37 +4,11 @@ import SwiftUI
 struct UniverseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    /// The menubar item is an `NSStatusItem` owned by `StatusItemController`,
+    /// not a `MenuBarExtra`, so a single click can interrupt speech or capture.
+    /// This scene exists only because `App` requires one; it shows nothing.
     var body: some Scene {
-        MenuBarExtra {
-            Button("Open Chat (⌥Space)") {
-                PanelController.shared.toggle()
-            }
-            Divider()
-            Button("AI Settings…") { PanelController.shared.openSheet(.ai) }
-            Button("Voice Settings…") { PanelController.shared.openSheet(.voice) }
-            Button("Memory…") { PanelController.shared.openSheet(.memory) }
-            Button("Permissions…") { PanelController.shared.openSheet(.permissions) }
-            Divider()
-            Button("Advanced (API key)…") {
-                SettingsWindowController.shared.show()
-            }
-            Divider()
-            Button("Quit") {
-                NSApplication.shared.terminate(nil)
-            }
-        } label: {
-            MenuBarIconView()
-        }
-    }
-}
-
-/// The mascot menubar icon; re-renders as the mood or animation frame changes.
-struct MenuBarIconView: View {
-    @State private var mood = MenuBarMood.shared
-
-    var body: some View {
-        Image(nsImage: MenuBarIcon.create(mood: mood.mood, animationFrame: mood.animationFrame))
-            .accessibilityLabel("Universe: \(mood.mood.rawValue)")
+        Settings { EmptyView() }
     }
 }
 
@@ -44,6 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotchCallButton.hide()
         VirtualNotch.hide()
         ClipboardMonitor.shared.stop()
+        // Release the microphone on the way out, or macOS leaves the recording
+        // indicator lit until the process is fully reaped.
+        VoiceService.shared.stopListening()
+        SpeechService.shared.stop()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -65,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         migrateLegacyDataDirectory()
         NSApp.setActivationPolicy(.accessory) // LSUIElement equivalent: no Dock icon
+        StatusItemController.shared.install()
         HotKeyManager.shared.onHotKey = {
             PanelController.shared.toggle()
         }
