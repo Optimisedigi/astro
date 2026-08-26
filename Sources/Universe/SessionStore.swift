@@ -7,6 +7,9 @@ struct Session: Codable, Identifiable {
         var role: String // "user" | "assistant"
         var timestamp = Date()
         var text: String
+        /// Images dropped on the notch wing. Optional so sessions written before
+        /// attachments existed still decode.
+        var attachments: [ImageAttachment]?
     }
 
     var id = UUID()
@@ -51,6 +54,11 @@ final class SessionStore: ObservableObject {
     }
 
     func deleteSession(_ id: UUID) {
+        // Delete the images that came with it too — a deleted conversation must
+        // not leave the user's screenshots sitting in Application Support.
+        for attachment in sessions.first(where: { $0.id == id })?.messages.flatMap({ $0.attachments ?? [] }) ?? [] {
+            ImageAttachmentLoader.discard(attachment)
+        }
         try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(id.uuidString).json"))
         sessions.removeAll { $0.id == id }
     }

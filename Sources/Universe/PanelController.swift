@@ -64,6 +64,14 @@ final class PanelController {
         chatState.startDiaryDictation = true
     }
 
+    /// Open the panel with images dropped on the notch wing already staged, so
+    /// the user only has to type the question.
+    func openWithAttachments(_ attachments: [ImageAttachment]) {
+        guard !attachments.isEmpty else { return }
+        show()
+        chatState.attach(attachments)
+    }
+
     /// Bring the panel up (idempotent) — used on launch and on reopen.
     func show() {
         // Re-center on the current screen every open (display setups change).

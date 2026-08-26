@@ -126,6 +126,22 @@ enum VirtualNotch {
         shapeLayer = nil
     }
 
+    /// The green a drop target turns. A fixed sRGB value rather than
+    /// `systemGreen`, so the wing and the notch — two panels, two layers — render
+    /// exactly the same shade.
+    static let dropTint = NSColor(srgbRed: 0.18, green: 0.70, blue: 0.34, alpha: 1)
+
+    /// Tint the notch green while an image is held over the bar, so the wing and
+    /// the notch light up as one strip. The notch itself never receives the drop
+    /// — it ignores mouse events — the wing panel covers it.
+    static func setDropHighlight(_ active: Bool) {
+        guard let shapeLayer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shapeLayer.fillColor = active ? dropTint.cgColor : NSColor.black.cgColor
+        CATransaction.commit()
+    }
+
     // MARK: - Overlay coordination
 
     private static func hideForOverlay() {

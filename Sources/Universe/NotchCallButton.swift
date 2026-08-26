@@ -101,14 +101,24 @@ enum NotchCallButton {
         let originX = notchLeftX - windowWidth + notchOverlap
         let originY = screenFrame.maxY - windowHeight
 
+        // The panel runs past the wing and across the notch, so a screenshot can
+        // be dropped anywhere on the black bar. Nothing extra is drawn there:
+        // the notch draws itself, this only catches the drag. It stops exactly
+        // at the notch's right edge — any further and it would swallow clicks on
+        // the menu bar items beyond it.
+        let panelWidth = windowWidth - notchOverlap + notchSize.width
+
         let newPanel = NSPanel(
-            contentRect: NSRect(x: originX, y: originY, width: windowWidth, height: windowHeight),
+            contentRect: NSRect(x: originX, y: originY, width: panelWidth, height: windowHeight),
             styleMask: [.borderless, .nonactivatingPanel, .utilityWindow],
             backing: .buffered,
             defer: false
         )
         newPanel.isFloatingPanel = true
-        newPanel.level = .mainMenu + 2
+        // One level above the virtual notch: the two overlap where the wing
+        // stretches under the notch, and the drag has to reach this panel rather
+        // than stopping at the notch drawn on top of it.
+        newPanel.level = .mainMenu + 3
         newPanel.backgroundColor = .clear
         newPanel.isOpaque = false
         newPanel.hasShadow = false
@@ -119,10 +129,14 @@ enum NotchCallButton {
 
         // Flipped root view (y=0 at top) — same pattern as NotchActivityIndicator.
         let rootView = FlippedCallButtonView(
-            frame: NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight)
+            frame: NSRect(x: 0, y: 0, width: panelWidth, height: windowHeight)
         )
         rootView.wantsLayer = true
-        rootView.layer?.backgroundColor = NSColor.clear.cgColor
+        // Not clear: AppKit drops mouse and drag events on fully transparent
+        // parts of a non-opaque window, so the stretch across the notch — which
+        // draws nothing of its own — would let every drag fall straight through.
+        // A hair of alpha is invisible but makes the whole bar a real target.
+        rootView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.02).cgColor
 
         // Shape layer: black wing joined to notch.
         let shape = CAShapeLayer()
@@ -185,6 +199,17 @@ enum NotchCallButton {
         // Click overlay.
         let overlay = CallButtonOverlay(frame: rootView.bounds)
         overlay.autoresizingMask = [.width, .height]
+        // Clicks and hover belong to the wing only; the stretch over the notch
+        // exists purely so a drop lands there too.
+        //
+        // Cost of that stretch: `VirtualNotch` passes clicks through, but this
+        // panel sits above it and does not, so clicks on the notch strip are
+        // swallowed instead of reaching the menu bar underneath. Accepted
+        // because the strip is drawn to look like a hardware notch, which is not
+        // clickable either. A drop needs a real window there — there is no way to
+        // take drags without taking clicks.
+        overlay.interactiveWidth = windowWidth
+        overlay.enableImageDrops()
         rootView.addSubview(overlay)
 
         newPanel.contentView = rootView
@@ -418,6 +443,24 @@ enum NotchCallButton {
         labelField.attributedStringValue = makeIconString(disconnect: disconnect)
     }
 
+    /// Light the whole wing green while an image is held over it, so the drop
+    /// target is unmistakable before the user lets go. Restores the ordinary
+    /// white hover tint afterwards.
+    static func setDropHighlight(_ active: Bool) {
+        // The notch is a separate panel, so it has to be tinted alongside the
+        // wing for the whole bar to read as one drop target.
+        VirtualNotch.setDropHighlight(active)
+        if let hover = hoverLayer as? CAShapeLayer {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            hover.fillColor = active
+                ? VirtualNotch.dropTint.cgColor
+                : NSColor.white.withAlphaComponent(0.08).cgColor
+            CATransaction.commit()
+        }
+        setHovered(active)
+    }
+
     /// Show hover highlight.
     fileprivate static func setHovered(_ hovered: Bool) {
         guard let hoverLayer else { return }
@@ -514,7 +557,10 @@ enum NotchCallButton {
         let notchLeftX = screenFrame.midX - notchSize.width / 2
         let originX = notchLeftX - windowWidth + notchOverlap
         let originY = screenFrame.maxY - windowHeight
-        panel.setFrame(NSRect(x: originX, y: originY, width: windowWidth, height: windowHeight), display: true)
+        // Same stretch across the notch as at creation, so the drop target still
+        // covers the whole bar after a display change.
+        let panelWidth = windowWidth - notchOverlap + notchSize.width
+        panel.setFrame(NSRect(x: originX, y: originY, width: panelWidth, height: windowHeight), display: true)
     }
 
     // MARK: - Wing Path
@@ -638,14 +684,26 @@ private final class FlippedCallButtonView: NSView {
 
 // MARK: - Click / Hover Overlay
 
-private final class CallButtonOverlay: NSView {
+/// Internal rather than private so the self-test can drive a real drop through
+/// the same view the notch wing installs.
+final class CallButtonOverlay: NSView {
     private var trackingArea: NSTrackingArea?
+
+    /// How much of the view responds to clicks and hover. The view is wider than
+    /// this — it stretches across the notch to catch drops — but the notch is not
+    /// a button, so pointer handling stops at the wing's edge.
+    var interactiveWidth: CGFloat?
+
+    private var interactiveRect: NSRect {
+        guard let interactiveWidth else { return bounds }
+        return NSRect(x: 0, y: 0, width: min(interactiveWidth, bounds.width), height: bounds.height)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let trackingArea { removeTrackingArea(trackingArea) }
         let area = NSTrackingArea(
-            rect: bounds,
+            rect: interactiveRect,
             options: [.mouseEnteredAndExited, .activeAlways],
             owner: self,
             userInfo: nil
@@ -666,6 +724,83 @@ private final class CallButtonOverlay: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        // The stretch across the notch is a drop target, not a button. Clicks
+        // there do nothing rather than starting a call.
+        guard interactiveRect.contains(point) else { return }
         NotchCallButton.handleTap(atX: point.x)
+    }
+
+    // MARK: - Dropping a screenshot on the wing
+
+    /// Drop an image here and it is staged on the next message: the panel opens
+    /// with the picture attached and its text already read out.
+    func enableImageDrops() {
+        registerForDraggedTypes(ImageAttachmentLoader.draggedTypes)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard ImageAttachmentLoader.containsImage(sender.draggingPasteboard) else { return [] }
+        NotchCallButton.setDropHighlight(true)
+        return .copy
+    }
+
+    /// Without this the drag goes dead after the first moment inside the view,
+    /// and the drop never arrives — `draggingEntered` alone is not enough.
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        ImageAttachmentLoader.containsImage(sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func draggingExited(_: NSDraggingInfo?) {
+        NotchCallButton.setDropHighlight(false)
+    }
+
+    override func draggingEnded(_: NSDraggingInfo) {
+        NotchCallButton.setDropHighlight(false)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        ImageAttachmentLoader.containsImage(sender.draggingPasteboard)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        NotchCallButton.setDropHighlight(false)
+        // The drag pasteboard dies with this call, so copy the bytes out now and
+        // do the decoding, shrinking and text recognition afterwards.
+        let payloads = ImageAttachmentLoader.payloads(from: sender.draggingPasteboard)
+        if !payloads.isEmpty {
+            CallButtonOverlay.stage(payloads)
+            return true
+        }
+
+        // Nothing readable yet: this is a promised file, which is how a
+        // screenshot dragged from its corner thumbnail arrives. The sender
+        // writes it for us, then we attach it.
+        let receivers = ImageAttachmentLoader.promiseReceivers(from: sender.draggingPasteboard)
+        guard !receivers.isEmpty else {
+            logger.warning("Drop contained no usable image")
+            return false
+        }
+        // Not captured weakly on purpose: the wing can collapse (and this view
+        // go away) between the drop and the promised file arriving, and the
+        // image must still be attached.
+        ImageAttachmentLoader.fulfill(receivers) { payloads in
+            guard !payloads.isEmpty else {
+                logger.warning("Promised drop delivered no usable image")
+                return
+            }
+            CallButtonOverlay.stage(payloads)
+        }
+        return true
+    }
+
+    private static func stage(_ payloads: [ImageAttachmentLoader.Payload]) {
+        Task { @MainActor in
+            let attachments = await ImageAttachmentLoader.attachments(from: payloads)
+            guard !attachments.isEmpty else {
+                logger.warning("Drop contained no usable image")
+                return
+            }
+            PanelController.shared.openWithAttachments(attachments)
+        }
     }
 }
