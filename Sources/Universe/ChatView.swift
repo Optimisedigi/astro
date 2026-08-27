@@ -40,19 +40,17 @@ final class ChatState: ObservableObject {
         !AnthropicOAuth.isSignedIn && (KeychainHelper.get(account: "anthropic")?.isEmpty ?? true)
     }
 
-    /// Voice mode only comes back if the user left it on AND the microphone is
-    /// already authorised — launching must never raise a permission prompt.
+    /// Whether the microphone may be opened right now. `voiceMode` records the
+    /// user's intent and is never cleared behind their back: a reinstall drops
+    /// the macOS grant, and silently switching voice off left it off even after
+    /// permission came back.
     static func shouldRestoreVoiceMode(saved: Bool, micAuthorized: Bool) -> Bool {
         saved && micAuthorized
     }
 
     init() {
-        guard voiceMode else { return }
-        guard Self.shouldRestoreVoiceMode(saved: true, micAuthorized: VoiceService.isAlreadyAuthorized) else {
-            // `didSet` never runs for assignments inside `init`, so persist by hand
-            // or the saved flag and the live one drift apart.
-            voiceMode = false
-            KokoroManager.shared.voiceEnabled = false
+        guard Self.shouldRestoreVoiceMode(saved: voiceMode, micAuthorized: VoiceService.isAlreadyAuthorized) else {
+            // Intent stays on; the panel starts listening once the grant returns.
             return
         }
         // A restored voice mode still needs its utterance handler wired, or the
@@ -110,10 +108,11 @@ final class ChatState: ObservableObject {
 
         // Without this the chat path fails silently: `try? startListening()`
         // discards the throw, so a mic that never opens looked identical to one
-        // that is simply hearing nothing.
+        // that is simply hearing nothing. The error is surfaced but the user's
+        // voice-mode choice is left alone, so the next panel open tries again.
         voice.onError = { [weak self] message in
             self?.errorMessage = message
-            self?.voiceMode = false
+            self?.voice.stopListening()
         }
     }
 
