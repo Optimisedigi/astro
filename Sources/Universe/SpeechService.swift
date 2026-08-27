@@ -48,8 +48,12 @@ final class SpeechService {
     /// Queue of audio buffers waiting to be played sequentially.
     private var bufferQueue: [PlaybackItem] = []
 
-    /// Whether the player is currently playing a buffer.
-    private var isPlaying = false
+    /// Buffers handed to the player node that have not finished playing yet.
+    /// More than one is deliberate — see `playNextBuffer()`.
+    private var scheduledBuffers = 0
+
+    /// Whether the player still has audio to output.
+    private var isPlaying: Bool { scheduledBuffers > 0 }
 
     /// Active generation tasks (so we can cancel on stop).
     private var generationTasks: [Task<Void, Never>] = []
@@ -374,7 +378,9 @@ final class SpeechService {
 
     private func stopPlayback() {
         bufferQueue.removeAll()
-        isPlaying = false
+        // `playerNode.stop()` discards every scheduled buffer, so none of their
+        // completion handlers can decrement this.
+        scheduledBuffers = 0
         playerNode.stop()
         endTalkingAnimation()
     }
@@ -437,17 +443,28 @@ final class SpeechService {
         // `engineStarted` alone is not enough: the engine can stop itself on a
         // hardware change, and the existing connection may be at a stale format.
         if engineStarted, audioEngine.isRunning, connectedFormat == format { return true }
-        audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: format)
-        connectedFormat = format
-        do {
-            try audioEngine.start()
-            engineStarted = true
-            logger.debug("Audio engine started")
-            return true
-        } catch {
-            logger.error("Audio engine failed to start: \(error.localizedDescription)")
-            return false
+        // Starting can fail while the hardware is being reconfigured — the
+        // microphone's own engine switching voice processing on or off is
+        // enough. Dropping the buffer there is what sounded like a stutter, so
+        // tear the engine down and try once more from a clean state.
+        for attempt in 0 ... 1 {
+            audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: format)
+            connectedFormat = format
+            do {
+                try audioEngine.start()
+                engineStarted = true
+                logger.debug("Audio engine started")
+                return true
+            } catch {
+                logger.error("Audio engine failed to start: \(error.localizedDescription)")
+                guard attempt == 0 else { break }
+                audioEngine.stop()
+                audioEngine.reset()
+                engineStarted = false
+                connectedFormat = nil
+            }
         }
+        return false
     }
 
     // MARK: - Sentence Extraction
@@ -728,57 +745,62 @@ final class SpeechService {
         }
     }
 
-    /// Plays the next buffer in the queue if nothing is currently playing.
+    /// Schedules every ready buffer on the player node, not just the next one.
+    /// `AVAudioPlayerNode` plays scheduled buffers back to back with no gap;
+    /// waiting for each completion callback before scheduling the next put a
+    /// main-thread hop between every pair, which is audible as a stutter on long
+    /// replies (many buffers, so many boundaries).
     private func playNextBuffer() {
-        guard !isPlaying, !bufferQueue.isEmpty else { return }
+        while !bufferQueue.isEmpty {
+            // If we underran (nothing scheduled while more utterances were
+            // pending), the gap until now is audible dead air.
+            if scheduledBuffers == 0, let underranAt = playbackUnderrunAt {
+                onPlaybackGap?(Date().timeIntervalSince(underranAt))
+                playbackUnderrunAt = nil
+            }
 
-        // If we underran (queue emptied while more utterances were pending),
-        // the gap between underran and this call is audible dead air.
-        if let underranAt = playbackUnderrunAt {
-            let gap = Date().timeIntervalSince(underranAt)
-            onPlaybackGap?(gap)
-            playbackUnderrunAt = nil
-        }
+            // A format change needs the node reconnected, which cannot happen
+            // under already-scheduled audio. Leave the rest queued; the last
+            // completion handler drains it.
+            let format = bufferQueue[0].buffer.format
+            if scheduledBuffers > 0, connectedFormat != format { return }
 
-        isPlaying = true
-        beginTalkingAnimation()
+            let item = bufferQueue.removeFirst()
+            guard ensureEngineRunning(format: format) else {
+                // Nothing will ever call the completion handler, so retire this
+                // utterance here rather than stalling the stream on silent audio.
+                utteranceDidFinish()
+                if bufferQueue.isEmpty { endTalkingAnimation() }
+                continue
+            }
 
-        let item = bufferQueue.removeFirst()
-        guard ensureEngineRunning(format: item.buffer.format) else {
-            // Nothing will ever call the completion handler, so retire this
-            // utterance here rather than stalling the stream on silent audio.
-            isPlaying = false
-            endTalkingAnimation()
-            utteranceDidFinish()
-            if !bufferQueue.isEmpty { playNextBuffer() }
-            return
-        }
+            beginTalkingAnimation()
+            if !firstAudioPlaybackFired {
+                firstAudioPlaybackFired = true
+                onFirstAudioPlayback?()
+            }
 
-        if !firstAudioPlaybackFired {
-            firstAudioPlaybackFired = true
-            onFirstAudioPlayback?()
-        }
+            scheduledBuffers += 1
+            // `.dataPlayedBack` fires AFTER the audio has actually been output
+            // through the hardware (not when the buffer is merely consumed from
+            // the render queue 100-300ms earlier).
+            playerNode.scheduleBuffer(item.buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.scheduledBuffers = max(0, self.scheduledBuffers - 1)
+                    self.utteranceDidFinish()
 
-        // `.dataPlayedBack` fires AFTER the audio has actually been output
-        // through the hardware (not when the buffer is merely consumed from
-        // the render queue 100-300ms earlier).
-        playerNode.scheduleBuffer(item.buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.isPlaying = false
-                self.utteranceDidFinish()
-
-                if !self.bufferQueue.isEmpty {
-                    self.playNextBuffer()
-                } else if self.pendingUtterances > 0, self.isStreaming {
-                    // Buffer queue is empty but more text is on its way and we
-                    // haven't finished streaming. Record an underrun; the next
-                    // playNextBuffer() will report the gap.
-                    self.playbackUnderrunAt = Date()
+                    if !self.bufferQueue.isEmpty {
+                        self.playNextBuffer()
+                    } else if self.scheduledBuffers == 0, self.pendingUtterances > 0, self.isStreaming {
+                        // Nothing left to play but more text is on its way.
+                        // Record an underrun; the next call reports the gap.
+                        self.playbackUnderrunAt = Date()
+                    }
                 }
             }
+            playerNode.play()
         }
-        playerNode.play()
     }
 
     private func completeStream() {
