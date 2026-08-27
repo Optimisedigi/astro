@@ -43,6 +43,8 @@ struct AISettingsBody: View {
             ForEach(AIProvider.allCases) { provider in
                 ProviderCard(provider: provider, registry: registry, login: login)
             }
+
+            KnowledgeSettingsCard()
         }
     }
 }

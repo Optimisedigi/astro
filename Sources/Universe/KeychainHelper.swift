@@ -14,7 +14,11 @@ enum KeychainHelper {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
+        /* Update in place when the item exists. Deleting and re-adding would
+           throw away its access-control list, so every "Always Allow" the user
+           had already granted is forgotten and the password prompt returns. */
+        let update = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        guard update == errSecItemNotFound else { return }
         var item = query
         item[kSecValueData as String] = data
         /* Device-only and not until first unlock: the secret never syncs to iCloud

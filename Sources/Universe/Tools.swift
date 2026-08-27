@@ -143,6 +143,7 @@ final class ToolRegistry {
         BashTool(), ReadTool(), WriteTool(), EditTool(),
         CreateReminderTool(), CreateRoutineTool(), ListSchedulesTool(), DeleteScheduleTool(),
         RememberTool(), ForgetTool(), RecallTool(), SoulSetTool(), SoulDeleteTool(),
+        KnowledgeSearchTool(),
     ]
 
     var schemas: [[String: Any]] {
