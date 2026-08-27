@@ -16,8 +16,11 @@ struct KnowledgeSearchTool: AgentTool {
     let description = """
         Search the personal transcript and document library (YouTube/X transcripts, \
         uploaded documents) and return the most relevant passages. Use this for \
-        questions about videos, talks, or papers the user has saved. Cite the \
-        passage title, and the [mm:ss] timestamp when one is present.
+        questions about videos, talks, or papers the user has saved. When you use \
+        a passage, say the answer came from the user's saved library and name the \
+        source title, with its [mm:ss] timestamp when one is present, so stored \
+        knowledge is never mistaken for your own. Say so plainly when the library \
+        had nothing and you are answering from your own knowledge instead.
         """
 
     var inputSchema: [String: Any] {
@@ -69,7 +72,11 @@ struct KnowledgeSearchTool: AgentTool {
         let passages = root?["passages"] as? [[String: Any]] ?? []
         guard !passages.isEmpty else { return "No relevant passages were found in the library." }
 
-        return passages.enumerated().map { index, passage in
+        // Restate the attribution rule with the results: a tool description read
+        // once at the top of a long conversation is easy for the model to drift from.
+        let header = "Passages from the user's saved library. Attribute any answer "
+            + "built on these to the library and name the source title."
+        return header + "\n\n" + passages.enumerated().map { index, passage in
             let title = passage["title"] as? String ?? "Untitled"
             let stamp = (passage["startAt"] as? String).map { " [\($0)]" } ?? ""
             let link = (passage["sourceUrl"] as? String).map { "\nSource: \($0)" } ?? ""
