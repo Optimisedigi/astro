@@ -144,6 +144,7 @@ final class ToolRegistry {
         CreateReminderTool(), CreateRoutineTool(), ListSchedulesTool(), DeleteScheduleTool(),
         RememberTool(), ForgetTool(), RecallTool(), SoulSetTool(), SoulDeleteTool(),
         KnowledgeSearchTool(),
+        WebSearchTool(), WebFetchTool(), BrowserTool(), ScreenshotTool(),
     ]
 
     var schemas: [[String: Any]] {

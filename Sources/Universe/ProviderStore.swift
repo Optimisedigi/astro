@@ -3,9 +3,10 @@ import Foundation
 /// Unified credential store for all providers.
 ///
 /// OAuth tokens live in per-provider Keychain accounts (AnthropicOAuth.TokenStore,
-/// OpenAIOAuth.TokenStore, GeminiOAuth.TokenStore). API-key providers (Moonshot,
-/// MiniMax) use a separate Keychain account. This enum is the single place that
-/// answers "is this provider connected?" and "give me a usable token/key".
+/// OpenAIOAuth.TokenStore, GeminiOAuth.TokenStore, KimiOAuth.TokenStore). API-key
+/// providers (Moonshot, MiniMax, MiMo) use a separate Keychain account. This enum
+/// is the single place that answers "is this provider connected?" and "give me a
+/// usable token/key".
 enum ProviderStore {
     /// API keys for providers that don't support OAuth.
     enum APIKeyStore {
@@ -33,10 +34,16 @@ enum ProviderStore {
             return OpenAIOAuth.isSignedIn
         case .gemini:
             return GeminiOAuth.isSignedIn
+        case .kimi:
+            return KimiOAuth.isSignedIn
         case .moonshot:
             return !(APIKeyStore.get(.moonshot)?.isEmpty ?? true)
         case .minimax:
             return !(APIKeyStore.get(.minimax)?.isEmpty ?? true)
+        case .xiaomi:
+            return !(APIKeyStore.get(.xiaomi)?.isEmpty ?? true)
+        case .xiaomiAPI:
+            return !(APIKeyStore.get(.xiaomiAPI)?.isEmpty ?? true)
         }
     }
 
@@ -50,10 +57,16 @@ enum ProviderStore {
             return try await OpenAIOAuth.validAccessToken()
         case .gemini:
             return try await GeminiOAuth.validAccessToken()
+        case .kimi:
+            return try await KimiOAuth.validAccessToken()
         case .moonshot:
             return APIKeyStore.get(.moonshot)
         case .minimax:
             return APIKeyStore.get(.minimax)
+        case .xiaomi:
+            return APIKeyStore.get(.xiaomi)
+        case .xiaomiAPI:
+            return APIKeyStore.get(.xiaomiAPI)
         }
     }
 
@@ -67,10 +80,16 @@ enum ProviderStore {
             OpenAIOAuth.signOut()
         case .gemini:
             GeminiOAuth.signOut()
+        case .kimi:
+            KimiOAuth.signOut()
         case .moonshot:
             APIKeyStore.clear(.moonshot)
         case .minimax:
             APIKeyStore.clear(.minimax)
+        case .xiaomi:
+            APIKeyStore.clear(.xiaomi)
+        case .xiaomiAPI:
+            APIKeyStore.clear(.xiaomiAPI)
         }
     }
 }

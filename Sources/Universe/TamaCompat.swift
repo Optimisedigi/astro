@@ -82,8 +82,11 @@ extension AIProvider {
         case .anthropic: return "https://api.anthropic.com"
         case .openai: return "https://api.openai.com"
         case .gemini: return "https://generativelanguage.googleapis.com"
+        case .kimi: return KimiOAuth.apiBaseURL
         case .moonshot: return "https://api.moonshot.cn"
         case .minimax: return "https://api.minimax.chat"
+        case .xiaomi: return "https://token-plan-sgp.xiaomimimo.com/v1"
+        case .xiaomiAPI: return "https://api.xiaomimimo.com/v1"
         }
     }
 }

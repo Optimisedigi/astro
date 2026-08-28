@@ -49,15 +49,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     /// Stops speech and microphone capture immediately.
     ///
-    /// Turning voice mode off is part of stopping, not a side effect: leaving it
-    /// on would keep the panel's mic button lit and let the post-reply resume
-    /// reopen the microphone a moment after the user asked for silence.
+    /// Suspends rather than disables: "be quiet now" is about this moment, but
+    /// `disableVoiceMode()` writes the preference to disk, so one stop click
+    /// left the panel mute forever — opening it with the shortcut no longer
+    /// started the microphone, even across relaunches. Suspending releases the
+    /// mic and stops the post-reply resume without touching the saved intent;
+    /// the next panel open listens again.
     func interrupt() {
         let chat = PanelController.shared.chatState
+        SpeechService.shared.stop()
         if chat.voiceMode {
-            chat.disableVoiceMode()
+            chat.suspendVoiceMode()
         } else {
-            SpeechService.shared.stop()
             VoiceService.shared.stopListening()
         }
         MenuBarMood.shared.setActivity(nil)

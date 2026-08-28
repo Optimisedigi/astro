@@ -48,12 +48,19 @@ final class SpeechService {
     /// Queue of audio buffers waiting to be played sequentially.
     private var bufferQueue: [PlaybackItem] = []
 
-    /// Buffers handed to the player node that have not finished playing yet.
-    /// More than one is deliberate — see `playNextBuffer()`.
-    private var scheduledBuffers = 0
+    /// Buffers handed to the player node that have not finished playing yet,
+    /// in play order. More than one is deliberate — see `playNextBuffer()`.
+    /// Held as items, not a count, so a hardware format change can put the
+    /// still-unheard ones back on the queue instead of dropping them.
+    private var scheduledItems: [PlaybackItem] = []
+
+    /// Invalidates in-flight completion handlers. `playerNode.stop()` fires the
+    /// handler of every buffer it discards; without this they would decrement
+    /// the queue for audio nobody heard.
+    private var playbackGeneration = 0
 
     /// Whether the player still has audio to output.
-    private var isPlaying: Bool { scheduledBuffers > 0 }
+    private var isPlaying: Bool { !scheduledItems.isEmpty }
 
     /// Active generation tasks (so we can cancel on stop).
     private var generationTasks: [Task<Void, Never>] = []
@@ -158,13 +165,40 @@ final class SpeechService {
     }
 
     /// Marks the graph stale so the next buffer reconnects at the new hardware
-    /// format. Any buffer already in flight is abandoned: stopping the player
-    /// fires its completion handler, which advances the queue as usual.
+    /// format, and rescues the audio that was queued behind the change.
+    ///
+    /// `playerNode.stop()` discards *every* scheduled buffer, not just the one
+    /// being rendered. Opening the microphone toggles Voice Processing, which
+    /// retunes the shared device and lands here — so a reply could lose several
+    /// whole sentences mid-flow and then resume, sounding like a dropped call.
+    /// Buffers that never reached the speakers go back on the queue; the one
+    /// that was mid-render is let go, because rescheduling it would replay
+    /// words the user already heard.
     private func handleConfigurationChange() {
         logger.debug("Audio configuration changed — reconnecting on next buffer")
         engineStarted = false
         connectedFormat = nil
-        if isPlaying { playerNode.stop() }
+        guard isPlaying else { return }
+
+        playbackGeneration += 1
+        let unheard = Array(scheduledItems.dropFirst())
+        scheduledItems.removeAll()
+        playerNode.stop()
+
+        // The interrupted buffer is gone for good, so retire its utterance here —
+        // its completion handler is now stale and will never run.
+        utteranceDidFinish()
+
+        logger.info("Requeuing \(unheard.count) unplayed buffers after format change")
+        bufferQueue.insert(contentsOf: unheard, at: 0)
+
+        // Resume on the next tick, not inside the notification: the engine is
+        // mid-reconfiguration here, and reconnecting the player node before the
+        // hardware settles is what the old lazy path was avoiding.
+        Task { @MainActor [weak self] in
+            guard let self, !self.bufferQueue.isEmpty else { return }
+            self.playNextBuffer()
+        }
     }
 
     /// Whether the service is currently speaking.
@@ -378,9 +412,10 @@ final class SpeechService {
 
     private func stopPlayback() {
         bufferQueue.removeAll()
-        // `playerNode.stop()` discards every scheduled buffer, so none of their
-        // completion handlers can decrement this.
-        scheduledBuffers = 0
+        // `playerNode.stop()` discards every scheduled buffer and fires their
+        // completion handlers; the generation bump makes those handlers no-ops.
+        playbackGeneration += 1
+        scheduledItems.removeAll()
         playerNode.stop()
         endTalkingAnimation()
     }
@@ -754,7 +789,7 @@ final class SpeechService {
         while !bufferQueue.isEmpty {
             // If we underran (nothing scheduled while more utterances were
             // pending), the gap until now is audible dead air.
-            if scheduledBuffers == 0, let underranAt = playbackUnderrunAt {
+            if scheduledItems.isEmpty, let underranAt = playbackUnderrunAt {
                 onPlaybackGap?(Date().timeIntervalSince(underranAt))
                 playbackUnderrunAt = nil
             }
@@ -763,7 +798,7 @@ final class SpeechService {
             // under already-scheduled audio. Leave the rest queued; the last
             // completion handler drains it.
             let format = bufferQueue[0].buffer.format
-            if scheduledBuffers > 0, connectedFormat != format { return }
+            if !scheduledItems.isEmpty, connectedFormat != format { return }
 
             let item = bufferQueue.removeFirst()
             guard ensureEngineRunning(format: format) else {
@@ -780,19 +815,20 @@ final class SpeechService {
                 onFirstAudioPlayback?()
             }
 
-            scheduledBuffers += 1
+            scheduledItems.append(item)
+            let generation = playbackGeneration
             // `.dataPlayedBack` fires AFTER the audio has actually been output
             // through the hardware (not when the buffer is merely consumed from
             // the render queue 100-300ms earlier).
             playerNode.scheduleBuffer(item.buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 Task { @MainActor in
-                    guard let self else { return }
-                    self.scheduledBuffers = max(0, self.scheduledBuffers - 1)
+                    guard let self, generation == self.playbackGeneration else { return }
+                    if !self.scheduledItems.isEmpty { self.scheduledItems.removeFirst() }
                     self.utteranceDidFinish()
 
                     if !self.bufferQueue.isEmpty {
                         self.playNextBuffer()
-                    } else if self.scheduledBuffers == 0, self.pendingUtterances > 0, self.isStreaming {
+                    } else if self.scheduledItems.isEmpty, self.pendingUtterances > 0, self.isStreaming {
                         // Nothing left to play but more text is on its way.
                         // Record an underrun; the next call reports the gap.
                         self.playbackUnderrunAt = Date()

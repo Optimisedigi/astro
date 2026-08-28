@@ -1,17 +1,16 @@
 import Foundation
 
 /// Providers and models, in the shape tama-agent uses (`AIProvider` + `ModelInfo`),
-/// extended with the newer models the learning-ai site ships.
-///
-/// Only Anthropic has a working credential path today. The other providers are still
-/// listed because the picker has to tell the truth about what exists and what is not
-/// connected — a card that silently does nothing would be worse than one that says so.
+/// extended with the anti-social catalog (Kimi For Coding OAuth, Xiaomi MiMo).
 enum AIProvider: String, Codable, CaseIterable, Identifiable {
     case anthropic
     case openai
     case gemini
+    case kimi
     case moonshot
     case minimax
+    case xiaomi
+    case xiaomiAPI
 
     var id: String { rawValue }
 
@@ -20,8 +19,11 @@ enum AIProvider: String, Codable, CaseIterable, Identifiable {
         case .anthropic: return "Anthropic"
         case .openai: return "OpenAI"
         case .gemini: return "Google Gemini"
+        case .kimi: return "Kimi"
         case .moonshot: return "Moonshot"
         case .minimax: return "MiniMax"
+        case .xiaomi: return "MiMo Token Plan"
+        case .xiaomiAPI: return "MiMo API credits"
         }
     }
 
@@ -30,8 +32,11 @@ enum AIProvider: String, Codable, CaseIterable, Identifiable {
         case .anthropic: return "Claude Sonnet 5 / Haiku 4.5 (via Claude account)"
         case .openai: return "GPT-5.5, Codex"
         case .gemini: return "Gemini 3 Pro / Flash (via Google account)"
-        case .moonshot: return "Kimi K2.6"
+        case .kimi: return "Kimi K3 / For Coding (subscription)"
+        case .moonshot: return "Kimi K2.6 (API key)"
         case .minimax: return "MiniMax M2.7"
+        case .xiaomi: return "mimo-v2.5-pro"
+        case .xiaomiAPI: return "mimo-v2.5-pro-ultraspeed"
         }
     }
 
@@ -80,11 +85,21 @@ final class ModelRegistry: ObservableObject {
               contextWindow: 1_048_576, maxOutputTokens: 65_535),
         .init(id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: .gemini,
               contextWindow: 1_048_576, maxOutputTokens: 65_535),
-        // Moonshot / MiniMax
+        // Kimi For Coding (OAuth subscription)
+        .init(id: "k3", name: "Kimi K3", provider: .kimi,
+              contextWindow: 1_000_000, maxOutputTokens: 32_768, supportsVision: false),
+        .init(id: "kimi-for-coding", name: "Kimi For Coding", provider: .kimi,
+              contextWindow: 256_000, maxOutputTokens: 32_768, supportsVision: false),
+        // Moonshot billed API-key fallback for the OAuth path
         .init(id: "kimi-k2.6", name: "Kimi K2.6", provider: .moonshot,
               contextWindow: 256_000, maxOutputTokens: 32_768, supportsVision: false),
         .init(id: "MiniMax-M2.7", name: "MiniMax M2.7", provider: .minimax,
               contextWindow: 204_800, maxOutputTokens: 16_384, supportsVision: false),
+        // Xiaomi MiMo (OpenAI-compatible API key)
+        .init(id: "mimo-v2.5-pro", name: "MiMo v2.5 Pro", provider: .xiaomi,
+              contextWindow: 1_000_000, maxOutputTokens: 32_768, supportsVision: false),
+        .init(id: "mimo-v2.5-pro-ultraspeed", name: "MiMo v2.5 Pro UltraSpeed", provider: .xiaomiAPI,
+              contextWindow: 1_000_000, maxOutputTokens: 32_768, supportsVision: false),
     ]
 
     static func models(for provider: AIProvider) -> [ModelInfo] {
@@ -113,4 +128,25 @@ final class ModelRegistry: ObservableObject {
     }
 
     func isConnected(_ provider: AIProvider) -> Bool { ProviderStore.isConnected(provider) }
+
+    /// Selected model first, then every other connected model's first catalog entry.
+    /// A failed stream walks this list; context-overflow stops it.
+    func fallbackChain() -> [ModelInfo] {
+        let selected = selectedModel
+        var chain: [ModelInfo] = []
+        var seenProviders: Set<AIProvider> = []
+        if ProviderStore.isConnected(selected.provider) {
+            chain.append(selected)
+            seenProviders.insert(selected.provider)
+        }
+        for provider in AIProvider.allCases where !seenProviders.contains(provider) {
+            guard ProviderStore.isConnected(provider),
+                  let model = Self.models.first(where: { $0.provider == provider }) else { continue }
+            chain.append(model)
+            seenProviders.insert(provider)
+        }
+        // Empty chain still tries the selected model so the stream surfaces
+        // "not signed in" instead of silently doing nothing.
+        return chain.isEmpty ? [selected] : chain
+    }
 }

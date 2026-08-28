@@ -19,8 +19,19 @@ struct ToolRun: Identifiable, Equatable {
         case "ls", "find": return "folder"
         case "grep": return "text.magnifyingglass"
         case "web_fetch": return "globe"
+        case "knowledge_search": return "books.vertical"
         case let n where n.contains("reminder") || n.contains("schedule"): return "alarm"
         default: return "wrench.and.screwdriver"
+        }
+    }
+
+    /// Human-readable chip text. Raw tool names are fine for developer tools,
+    /// but the library search has to be unmistakable in the transcript —
+    /// it is how the user knows an answer came from their own saved sources.
+    var label: String {
+        switch name {
+        case "knowledge_search": return "Knowledge Library"
+        default: return name
         }
     }
 }
@@ -48,7 +59,7 @@ struct ToolRowView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 14)
-            Text(run.name)
+            Text(run.label)
                 .font(.caption.weight(.medium))
             if let detail = run.detail {
                 Text(detail)
@@ -64,7 +75,7 @@ struct ToolRowView: View {
         .padding(.vertical, 6)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(run.name) \(run.detail ?? "") \(statusLabel)")
+        .accessibilityLabel("\(run.label) \(run.detail ?? "") \(statusLabel)")
     }
 
     @ViewBuilder

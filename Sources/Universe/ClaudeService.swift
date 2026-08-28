@@ -26,6 +26,7 @@ actor ClaudeService {
         case noAPIKey
         case httpError(Int, String)
         case unsupportedProvider(String)
+        case allModelsFailed
 
         var errorDescription: String? {
             switch self {
@@ -33,6 +34,7 @@ actor ClaudeService {
             case .noAPIKey: return "No API key. Add one in AI Settings."
             case .httpError(let code, let body): return "API error (HTTP \(code)): \(body)"
             case .unsupportedProvider(let name): return "\(name) is not wired up yet."
+            case .allModelsFailed: return "Every connected model failed. Check AI Settings."
             }
         }
     }
@@ -68,24 +70,49 @@ actor ClaudeService {
         AsyncThrowingStream { continuation in
             Task {
                 do {
-                    let model = await MainActor.run { ModelRegistry.shared.selectedModel }
-                    let provider = model.provider
-
-                    switch provider {
-                    case .anthropic:
-                        try await streamAnthropic(messages: messages, tools: tools, model: model, continuation: continuation)
-                    case .openai:
-                        try await streamOpenAI(messages: messages, tools: tools, model: model, continuation: continuation)
-                    case .gemini:
-                        try await streamGemini(messages: messages, tools: tools, model: model, continuation: continuation)
-                    case .moonshot, .minimax:
-                        try await streamOpenAICompatible(messages: messages, tools: tools, model: model, provider: provider, continuation: continuation)
+                    let chain = await MainActor.run { ModelRegistry.shared.fallbackChain() }
+                    var lastError: Error = ServiceError.allModelsFailed
+                    for model in chain {
+                        do {
+                            try await streamWith(model: model, messages: messages, tools: tools, continuation: continuation)
+                            return
+                        } catch {
+                            lastError = error
+                            if Self.isContextOverflow(error) { throw error }
+                            continue
+                        }
                     }
+                    throw lastError
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
         }
+    }
+
+    /// One attempt against a single model. Failures here walk the fallback chain.
+    private func streamWith(
+        model: ModelInfo,
+        messages: [[String: Any]], tools: [[String: Any]],
+        continuation: AsyncThrowingStream<StreamEvent, Error>.Continuation
+    ) async throws {
+        switch model.provider {
+        case .anthropic:
+            try await streamAnthropic(messages: messages, tools: tools, model: model, continuation: continuation)
+        case .openai:
+            try await streamOpenAI(messages: messages, tools: tools, model: model, continuation: continuation)
+        case .gemini:
+            try await streamGemini(messages: messages, tools: tools, model: model, continuation: continuation)
+        case .kimi:
+            try await streamKimi(messages: messages, tools: tools, model: model, continuation: continuation)
+        case .moonshot, .minimax, .xiaomi, .xiaomiAPI:
+            try await streamOpenAICompatible(messages: messages, tools: tools, model: model, provider: model.provider, continuation: continuation)
+        }
+    }
+
+    private static func isContextOverflow(_ error: Error) -> Bool {
+        let text = (error as? ServiceError)?.errorDescription ?? error.localizedDescription
+        return text.range(of: "context|too long|maximum", options: .regularExpression) != nil
     }
 
     // MARK: - Anthropic
@@ -353,7 +380,39 @@ actor ClaudeService {
         continuation.finish()
     }
 
-    // MARK: - OpenAI-compatible (Moonshot, MiniMax)
+    // MARK: - Kimi For Coding (OAuth)
+
+    /// K3 silently downgrades to K2.6 unless thinking is enabled — same quirk as anti-social.
+    private func streamKimi(
+        messages: [[String: Any]], tools: [[String: Any]], model: ModelInfo,
+        continuation: AsyncThrowingStream<StreamEvent, Error>.Continuation
+    ) async throws {
+        guard let token = try await KimiOAuth.validAccessToken(), !token.isEmpty else {
+            throw ServiceError.notSignedIn
+        }
+        let url = URL(string: "\(KimiOAuth.apiBaseURL)/chat/completions")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        for (header, value) in KimiOAuth.requestHeaders(accessToken: token) {
+            request.setValue(value, forHTTPHeaderField: header)
+        }
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+
+        let systemText = await Self.systemPromptWithMemory()
+        var body: [String: Any] = [
+            "model": model.id,
+            "stream": true,
+            "messages": Self.openAIMessages(from: messages, system: systemText),
+        ]
+        if model.id == "k3" {
+            body["thinking"] = ["type": "enabled"]
+            body["reasoning_effort"] = "low"
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        try await parseOpenAIChatStream(request: request, continuation: continuation)
+    }
+
+    // MARK: - OpenAI-compatible (Moonshot, MiniMax, MiMo)
 
     private func streamOpenAICompatible(
         messages: [[String: Any]], tools: [[String: Any]], model: ModelInfo, provider: AIProvider,
@@ -367,6 +426,8 @@ actor ClaudeService {
         switch provider {
         case .moonshot: baseURL = "https://api.moonshot.ai/v1/chat/completions"
         case .minimax: baseURL = "https://api.minimax.io/v1/chat/completions"
+        case .xiaomi: baseURL = "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions"
+        case .xiaomiAPI: baseURL = "https://api.xiaomimimo.com/v1/chat/completions"
         default: throw ServiceError.unsupportedProvider(provider.displayName)
         }
 
@@ -377,24 +438,29 @@ actor ClaudeService {
         request.setValue("universe/0.1 (macOS)", forHTTPHeaderField: "user-agent")
 
         let systemText = await Self.systemPromptWithMemory()
-        let openAIMessages: [[String: Any]] = [
-            ["role": "system", "content": systemText],
-        ] + messages.map { msg -> [String: Any] in
-            var m = msg
-            if m["role"] as? String == "assistant", let content = m["content"] as? [[String: Any]] {
-                let text = content.compactMap { ($0["text"] as? String) }.joined()
-                m["content"] = text
-            }
-            return m
-        }
-
         var body: [String: Any] = [
             "model": model.id,
             "stream": true,
-            "messages": openAIMessages,
+            "messages": Self.openAIMessages(from: messages, system: systemText),
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        try await parseOpenAIChatStream(request: request, continuation: continuation)
+    }
 
+    private static func openAIMessages(from messages: [[String: Any]], system: String) -> [[String: Any]] {
+        [["role": "system", "content": system]] + messages.map { msg -> [String: Any] in
+            var m = msg
+            if m["role"] as? String == "assistant", let content = m["content"] as? [[String: Any]] {
+                m["content"] = content.compactMap { $0["text"] as? String }.joined()
+            }
+            return m
+        }
+    }
+
+    private func parseOpenAIChatStream(
+        request: URLRequest,
+        continuation: AsyncThrowingStream<StreamEvent, Error>.Continuation
+    ) async throws {
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             var errorBody = ""

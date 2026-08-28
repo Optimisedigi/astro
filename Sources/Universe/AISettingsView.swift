@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The AI Settings sheet: which model answers, and which accounts are connected.
@@ -89,6 +90,8 @@ struct ProviderCard: View {
             }
         } else if provider == .anthropic {
             anthropicControls
+        } else if provider == .kimi {
+            kimiControls
         } else if provider == .openai || provider == .gemini {
             oauthControls
         } else {
@@ -105,6 +108,39 @@ struct ProviderCard: View {
             LoginCodeEntry(model: login)
         case .idle:
             Button("Sign in with Claude", action: login.startLogin)
+        }
+    }
+
+    @ViewBuilder
+    private var kimiControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isConnecting {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(connectError ?? "Waiting for browser approval…")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                Button("Sign in with Kimi") {
+                    isConnecting = true
+                    connectError = nil
+                    Task {
+                        do {
+                            let auth = try await KimiOAuth.beginLogin()
+                            connectError = "Code: \(auth.userCode)"
+                            NSWorkspace.shared.open(auth.verificationURI)
+                            try await KimiOAuth.completeLogin(auth)
+                            connectError = nil
+                        } catch {
+                            connectError = error.localizedDescription
+                        }
+                        isConnecting = false
+                    }
+                }
+            }
+            if let connectError, !isConnecting {
+                ErrorTextBlock(message: connectError)
+            }
         }
     }
 

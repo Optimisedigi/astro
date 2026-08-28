@@ -587,8 +587,16 @@ enum SelfTest {
               "models: new Sonnet 5 present")
         check(ModelRegistry.models(for: .gemini).contains { $0.id == "gemini-3-pro-preview" },
               "models: new Gemini 3 Pro present")
+        check(ModelRegistry.models(for: .kimi).contains { $0.id == "k3" },
+              "models: Kimi K3 present")
+        check(ModelRegistry.models(for: .xiaomi).contains { $0.id == "mimo-v2.5-pro" },
+              "models: MiMo v2.5 Pro present")
         check(AIProvider.allCases.allSatisfy(\.isImplemented),
               "models: all providers have a sign-in path")
+
+        let chain = ModelRegistry.shared.fallbackChain()
+        check(!chain.isEmpty && chain[0].id == ModelRegistry.shared.selectedModelID,
+              "models: fallback chain starts with the selected model")
 
         let registry = ModelRegistry.shared
         let original = registry.selectedModelID
@@ -930,6 +938,9 @@ enum SelfTest {
         let names = Set(ToolRegistry.shared.tools.map(\.name))
         check(names.isSuperset(of: ["remember", "forget", "recall", "soul_set", "soul_delete"]),
               "memory: all five memory tools are registered")
+        // The system prompt promises these by name; unregistered, the model cannot call them.
+        check(names.isSuperset(of: ["web_search", "web_fetch", "browser", "screenshot", "knowledge_search"]),
+              "tools: web, browser, screenshot and knowledge tools are registered")
     }
 
     // Schedule parsing + store checks run before UI exists, so they can use ScheduleStore safely.

@@ -67,7 +67,12 @@ final class ChatState: ObservableObject {
     /// is up, so the user can just start talking.
     func panelDidOpen() {
         panelVisible = true
-        guard voiceMode else { return }
+        // Opening the panel is a fresh request to talk, so it clears a
+        // suspension left by a stop click. Not while the microphone is busy:
+        // diary dictation suspends chat too, and reopening the panel mid-take
+        // must not steal its handlers.
+        if !voice.isListening { voiceModeSuspended = false }
+        guard voiceMode, !voiceModeSuspended else { return }
         // Load the Kokoro model now, off the main thread. Otherwise the first
         // sentence of the first reply pays for the model load, which is long
         // enough that streaming looks like it never started.
@@ -174,7 +179,9 @@ final class ChatState: ObservableObject {
     private func resumeListeningAfterReply() {
         Task {
             while speech.isSpeaking { try? await Task.sleep(for: .milliseconds(200)) }
-            if voiceMode, panelVisible { try? voice.startListening() }
+            // A stop click suspends mid-reply; reopening the mic here would
+            // undo the silence the user just asked for.
+            if voiceMode, panelVisible, !voiceModeSuspended { try? voice.startListening() }
         }
     }
 
