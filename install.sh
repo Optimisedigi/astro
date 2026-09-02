@@ -13,29 +13,16 @@ DEST="/Applications/Universe.app"
 
 command -v xcodebuild >/dev/null || { echo "xcodebuild not found. Install Xcode."; exit 1; }
 
-# Keychain access is granted to a *code identity*, not to a path. `swift build`
-# only ad-hoc signs, so macOS falls back to pinning the exact binary hash and
-# every rebuild looks like a brand new program — which is why the login-keychain
-# password kept being demanded. Signing the SPM binary with the same identity and
-# bundle ID as the app gives both the same designated requirement, so one
-# "Always Allow" survives every future build.
-SIGN_ID=$(security find-identity -v -p codesigning \
-  | awk -F'"' '/Apple Development/ {print $2; exit}')
-
-sign_like_the_app() {
-  [ -n "$SIGN_ID" ] || { echo "    (no Apple Development identity; leaving $1 ad-hoc signed)"; return 0; }
-  codesign --force --sign "$SIGN_ID" --identifier com.universe.app "$1" 2>/dev/null \
-    || echo "    (could not sign $1; keychain may prompt again)"
-}
-
 if command -v xcodegen >/dev/null; then
   echo "==> Regenerating the Xcode project"
   xcodegen generate >/dev/null
 fi
 
+# Self-test never touches the Keychain (see KeychainHelper.isSelfTest). Do not
+# codesign this CLI binary as com.universe.app — that made macOS treat a naked
+# `exec` as the app and popped a lock dialog that Always Allow could not settle.
 echo "==> Running the offline self-test"
 swift build >/dev/null
-sign_like_the_app ./.build/debug/Universe
 ./.build/debug/Universe --selftest
 
 echo "==> Building ($CONFIGURATION)"

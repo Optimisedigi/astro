@@ -33,6 +33,15 @@ final class KokoroManager: ObservableObject {
         }
     }
 
+    /// Spoken replies. Independent of the microphone: listen-only types the answer.
+    @Published var speechEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(speechEnabled, forKey: "kokoroSpeechEnabled")
+            // swiftformat:disable:next redundantSelf
+            logger.info("Speech enabled changed to: \(self.speechEnabled)")
+        }
+    }
+
     @Published var selectedVoice: String {
         didSet {
             UserDefaults.standard.set(selectedVoice, forKey: "kokoroSelectedVoice")
@@ -76,6 +85,7 @@ final class KokoroManager: ObservableObject {
 
     private init() {
         voiceEnabled = UserDefaults.standard.object(forKey: "kokoroVoiceEnabled") as? Bool ?? true
+        speechEnabled = UserDefaults.standard.object(forKey: "kokoroSpeechEnabled") as? Bool ?? true
         selectedVoice = UserDefaults.standard.string(forKey: "kokoroSelectedVoice") ?? "af_heart"
         let savedSpeed = UserDefaults.standard.object(forKey: "kokoroVoiceSpeed") as? Float ?? Self.defaultSpeed
         voiceSpeed = min(max(savedSpeed, Self.minSpeed), Self.maxSpeed)
@@ -428,6 +438,7 @@ final class KokoroManager: ObservableObject {
 
     private init() {
         voiceEnabled = UserDefaults.standard.object(forKey: "kokoroVoiceEnabled") as? Bool ?? true
+        speechEnabled = UserDefaults.standard.object(forKey: "kokoroSpeechEnabled") as? Bool ?? true
         selectedVoice = UserDefaults.standard.string(forKey: "kokoroSelectedVoice") ?? "af_heart"
         let savedSpeed = UserDefaults.standard.object(forKey: "kokoroVoiceSpeed") as? Float ?? Self.defaultSpeed
         voiceSpeed = min(max(savedSpeed, Self.minSpeed), Self.maxSpeed)
@@ -450,6 +461,10 @@ final class KokoroManager: ObservableObject {
     static let sampleRate: Double = 24000
     @Published var voiceEnabled: Bool {
         didSet { UserDefaults.standard.set(voiceEnabled, forKey: "kokoroVoiceEnabled") }
+    }
+
+    @Published var speechEnabled: Bool {
+        didSet { UserDefaults.standard.set(speechEnabled, forKey: "kokoroSpeechEnabled") }
     }
 
     @Published var selectedVoice: String {

@@ -7,7 +7,15 @@ enum KeychainHelper {
     private static let service = "com.universe.apikeys"
     private static let legacyService = "com.tamaclone.apikeys"
 
+    /// Install runs `--selftest` as a naked CLI binary. That binary is not the
+    /// .app, so Keychain shows a lock with an `exec` badge and Always Allow
+    /// never sticks. Skip the store entirely in that mode.
+    private static var isSelfTest: Bool {
+        CommandLine.arguments.contains("--selftest")
+    }
+
     static func set(_ value: String, account: String) {
+        guard !isSelfTest else { return }
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -28,6 +36,7 @@ enum KeychainHelper {
     }
 
     static func get(account: String) -> String? {
+        guard !isSelfTest else { return nil }
         if let value = read(service: service, account: account) { return value }
         /* The app was renamed from TamaClone; carry an existing key over once so
            the rename doesn't silently lose it. */
@@ -39,6 +48,7 @@ enum KeychainHelper {
     }
 
     static func remove(account: String) {
+        guard !isSelfTest else { return }
         for service in [service, legacyService] {
             SecItemDelete([
                 kSecClass as String: kSecClassGenericPassword,

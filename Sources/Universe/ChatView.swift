@@ -285,6 +285,14 @@ final class ChatState: ObservableObject {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachments = pendingAttachments
         guard !text.isEmpty || !attachments.isEmpty, !isStreaming else { return }
+        // Whole field is a real path: open Finder instead of asking the model.
+        if attachments.isEmpty, let url = FinderGo.existingURL(from: text) {
+            guard FinderGo.reveal(url) else { return }
+            input = ""
+            errorMessage = nil
+            PanelController.shared.hide()
+            return
+        }
         input = ""
         pendingAttachments = []
         errorMessage = nil
@@ -314,6 +322,8 @@ final class ChatState: ObservableObject {
                 // Speaking keeps its own mood; otherwise back to time-of-day.
                 if !speech.isSpeaking { MenuBarMood.shared.setActivity(nil) }
             }
+            // Speak only when spoken replies are on. Mic can stay on without TTS.
+            let speak = KokoroManager.shared.speechEnabled
             do {
                 let loop = AgentLoop(workspace: workspace)
                 if voiceMode { voice.stopListening() }
@@ -322,9 +332,7 @@ final class ChatState: ObservableObject {
                     guard let self, let last = self.session.messages.indices.last else { return }
                     self.session.messages[last].text = text
                 }
-                // Speak while the reply is still arriving, so Kokoro starts on
-                // the first sentence instead of waiting for the whole response.
-                if voiceMode { speech.beginStreaming() }
+                if speak { speech.beginStreaming() }
 
                 var firstToken = true
                 try await loop.run(apiMessages: apiMessages, streamProvider: ClaudeService.shared.streamEvents) { [weak self] delta in
@@ -335,7 +343,7 @@ final class ChatState: ObservableObject {
                         MascotController.shared.setState(.responding)
                     }
                     self.queue.append(delta)
-                    if self.voiceMode { self.speech.feedChunk(delta) }
+                    if speak { self.speech.feedChunk(delta) }
                 } onToolActivity: { [weak self] activity in
                     self?.apply(activity)
                 }
@@ -355,15 +363,15 @@ final class ChatState: ObservableObject {
                         MascotController.shared.setState(.idle)
                     }
                 }
-                if voiceMode {
+                if speak {
                     // Waits for queued audio to drain, so the microphone
                     // reopens only once she has actually stopped talking.
                     await speech.finishStreaming()
-                    resumeListeningAfterReply()
                 }
+                if voiceMode { resumeListeningAfterReply() }
             } catch {
                 // Drop any half-spoken reply rather than talk over the error.
-                if voiceMode { speech.stop() }
+                if speak { speech.stop() }
                 errorMessage = error.localizedDescription
                 MenuBarMood.shared.setActivity(.error)
                 MascotController.shared.setState(.thinking)
@@ -536,13 +544,23 @@ struct ChatView: View {
                 Image(systemName: state.voiceMode ? "mic.fill" : "mic")
                     .font(.system(size: 16))
                     .foregroundStyle(state.voiceMode ? Color.red : .secondary)
+                    .frame(width: 22, height: 40)
             }
             .buttonStyle(.plain)
             .help("Toggle voice mode")
-            // Keep the mic centred on the first line as the field grows.
-            .frame(height: 40)
+
+            Button(action: { PanelController.shared.hide() }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary.opacity(0.45))
+                    .frame(width: 22, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Close")
+            .accessibilityLabel("Close")
         }
-        .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 24))
+        .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
         .frame(minHeight: 58)
     }
 

@@ -28,6 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--selftest") {
             Task {
                 let passed = await SelfTest.run()
+                // exit() skips the UserDefaults flush, which left the microphone
+                // off after install-time --selftest wrote kokoroVoiceEnabled=false.
+                UserDefaults.standard.synchronize()
                 exit(passed ? 0 : 1)
             }
             return

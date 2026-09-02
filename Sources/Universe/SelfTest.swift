@@ -15,6 +15,40 @@ enum SelfTest {
             if !condition { failures += 1 }
         }
 
+        // The checks write into UserDefaults.standard. Snapshot the live keys and
+        // put them back so install-time --selftest cannot mute the microphone.
+        let prefs = UserDefaults.standard
+        let savedVoice = (
+            enabled: prefs.object(forKey: "kokoroVoiceEnabled"),
+            speech: prefs.object(forKey: "kokoroSpeechEnabled"),
+            speed: prefs.object(forKey: "kokoroVoiceSpeed"),
+            voice: prefs.string(forKey: "kokoroSelectedVoice")
+        )
+        defer {
+            let kokoro = KokoroManager.shared
+            if let enabled = savedVoice.enabled as? Bool {
+                kokoro.voiceEnabled = enabled
+            } else {
+                restoreDefault(nil, forKey: "kokoroVoiceEnabled")
+            }
+            if let speech = savedVoice.speech as? Bool {
+                kokoro.speechEnabled = speech
+            } else {
+                restoreDefault(nil, forKey: "kokoroSpeechEnabled")
+            }
+            if let speed = savedVoice.speed as? Float {
+                kokoro.voiceSpeed = speed
+            } else {
+                restoreDefault(nil, forKey: "kokoroVoiceSpeed")
+            }
+            if let voice = savedVoice.voice {
+                kokoro.selectedVoice = voice
+            } else {
+                restoreDefault(nil, forKey: "kokoroSelectedVoice")
+            }
+            UserDefaults.standard.synchronize()
+        }
+
         let workspace = FileManager.default.temporaryDirectory
             .appendingPathComponent("universe-selftest-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
@@ -152,8 +186,19 @@ enum SelfTest {
         // 12. Dropped image attachments
         await runAttachmentChecks(check: check)
 
+        // 13. Paste a path into Ask anything → Finder
+        runFinderGoChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
+    }
+
+    private static func restoreDefault(_ value: Any?, forKey key: String) {
+        if let value {
+            UserDefaults.standard.set(value, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 
     /// A screenshot dropped on the notch wing must decode, shrink, store and
@@ -272,6 +317,34 @@ enum SelfTest {
               "a non-image keeps being refused as it moves over the wing")
         check(!overlay.performDragOperation(FakeDrag(board: textBoard)),
               "dropping a non-image on the wing is rejected")
+    }
+
+    /// Paste a path into Ask anything and press Enter — Finder, not the model.
+    static func runFinderGoChecks(check: (Bool, String) -> Void) {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("universe-finder-go-\(UUID().uuidString).txt")
+        FileManager.default.createFile(atPath: file.path, contents: Data("hi".utf8))
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        check(FinderGo.existingURL(from: file.path)?.path == file.path,
+              "an existing file path is recognised")
+        check(FinderGo.existingURL(from: "  \(file.path)  ")?.path == file.path,
+              "surrounding spaces are stripped")
+        check(FinderGo.existingURL(from: "\"\(file.path)\"")?.path == file.path,
+              "a quoted path is recognised")
+        check(FinderGo.existingURL(from: "file://\(file.path)")?.path == file.path,
+              "a file:// URL is recognised")
+        check(FinderGo.existingURL(from: FileManager.default.homeDirectoryForCurrentUser.path) != nil,
+              "an existing folder path is recognised")
+        check(FinderGo.existingURL(from: "~") != nil, "~ expands to the home folder")
+        check(FinderGo.existingURL(from: "/no/such/universe-path-\(UUID().uuidString)") == nil,
+              "a missing path is left for the model")
+        check(FinderGo.existingURL(from: "open \(file.path)") == nil,
+              "a sentence that mentions a path still goes to the model")
+        check(FinderGo.existingURL(from: "what is /etc/hosts") == nil,
+              "a question is not treated as a path")
+        check(FinderGo.existingURL(from: "https://example.com") == nil,
+              "a web URL is not treated as a local path")
     }
 
     @MainActor
@@ -607,7 +680,10 @@ enum SelfTest {
 
         // Permissions: every row must map to a real Settings pane and describe itself.
         let checker = PermissionsChecker()
-        await checker.refresh()
+        // UNUserNotificationCenter.notificationSettings() hangs in a CLI --selftest.
+        if !CommandLine.arguments.contains("--selftest") {
+            await checker.refresh()
+        }
         check(checker.permissions.count == PermissionsChecker.Kind.allCases.count, "permissions: every kind has a row")
         check(checker.permissions.allSatisfy { !$0.title.isEmpty && !$0.reason.isEmpty },
               "permissions: every row explains itself")
@@ -650,6 +726,15 @@ enum SelfTest {
         check(!ChatState.shouldRestoreVoiceMode(saved: false, micAuthorized: true),
               "speech: voice mode stays off when the user left it off")
         kokoro.voiceEnabled = restoreEnabled
+
+        let restoreSpeech = kokoro.speechEnabled
+        kokoro.speechEnabled = false
+        check(UserDefaults.standard.object(forKey: "kokoroSpeechEnabled") as? Bool == false,
+              "speech: spoken replies persist when switched off")
+        kokoro.speechEnabled = true
+        check(UserDefaults.standard.object(forKey: "kokoroSpeechEnabled") as? Bool == true,
+              "speech: spoken replies persist when switched on")
+        kokoro.speechEnabled = restoreSpeech
 
         let restoreVoice = kokoro.selectedVoice
         kokoro.selectedVoice = "af_bella"
@@ -716,14 +801,7 @@ enum SelfTest {
         check(tokens?.isExpired == true, "oauth: past-expiry token is expired")
         check(AnthropicOAuth.Tokens(json: ["refresh_token": "r"]) == nil, "oauth: response without an access token is rejected")
 
-        // Keychain round trip, then a clean sign-out.
-        let hadSession = AnthropicOAuth.isSignedIn
-        if !hadSession, let sample = AnthropicOAuth.Tokens(json: ["access_token": "selftest", "expires_in": 3600.0]) {
-            AnthropicOAuth.TokenStore.save(sample)
-            check(AnthropicOAuth.TokenStore.load()?.accessToken == "selftest", "oauth: tokens round-trip through the Keychain")
-            AnthropicOAuth.signOut()
-            check(!AnthropicOAuth.isSignedIn, "oauth: sign-out clears the Keychain")
-        }
+        // Live Keychain I/O is skipped in CLI --selftest (see KeychainHelper).
     }
 
     static func runMarkdownChecks(check: (Bool, String) -> Void) {

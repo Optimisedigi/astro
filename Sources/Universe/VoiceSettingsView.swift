@@ -39,6 +39,8 @@ struct VoiceSettingsBody: View {
         SettingsSheetBody {
             voiceModeRow
             Divider()
+            spokenRepliesRow
+            Divider()
 
             modelRow
             Divider()
@@ -72,18 +74,37 @@ struct VoiceSettingsBody: View {
                 .foregroundStyle(state.voiceMode ? Color.accentColor : .secondary)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Voice Mode").fontWeight(.semibold)
-                Text(state.voiceMode ? "Listening and speaking enabled" : "Type instead of talking")
+                Text("Microphone").fontWeight(.semibold)
+                Text(state.voiceMode ? "Ask by talking" : "Type to ask")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Toggle("Voice Mode", isOn: Binding(
+            Toggle("Microphone", isOn: Binding(
                 get: { state.voiceMode },
                 set: { $0 ? state.enableVoiceMode() : state.disableVoiceMode() }
             ))
             .labelsHidden()
             .toggleStyle(.switch)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var spokenRepliesRow: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: kokoro.speechEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+                .foregroundStyle(kokoro.speechEnabled ? Color.accentColor : .secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Spoken replies").fontWeight(.semibold)
+                Text(kokoro.speechEnabled ? "Answers are read out loud" : "Answers stay as text")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Toggle("Spoken replies", isOn: $kokoro.speechEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
         }
         .accessibilityElement(children: .combine)
     }

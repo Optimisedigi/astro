@@ -144,8 +144,10 @@ final class PermissionsChecker: ObservableObject {
     }
 
     private func notificationStatus() async -> Status {
-        // UNUserNotificationCenter traps without a bundle (selftest / CLI runs).
-        guard Bundle.main.bundleIdentifier != nil else { return .unknown }
+        // UNUserNotificationCenter traps without a bundle, and hangs forever in
+        // a codesigned CLI `--selftest` even when a bundle id is present.
+        guard Bundle.main.bundleIdentifier != nil,
+              !CommandLine.arguments.contains("--selftest") else { return .unknown }
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         switch settings.authorizationStatus {
         case .authorized, .provisional, .ephemeral: return .granted
