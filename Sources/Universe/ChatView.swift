@@ -63,10 +63,15 @@ final class ChatState: ObservableObject {
     /// this is true, so the mic indicator tracks the window exactly.
     private(set) var panelVisible = false
 
+    /// Bumped on every open so the composer re-claims keyboard focus. A bool
+    /// stays true across hide/show, which leaves Cmd+V going to the previous app.
+    @Published var composerFocusToken = 0
+
     /// The panel became visible. Tama opens the microphone whenever its window
     /// is up, so the user can just start talking.
     func panelDidOpen() {
         panelVisible = true
+        composerFocusToken &+= 1
         // Opening the panel is a fresh request to talk, so it clears a
         // suspension left by a stop click. Not while the microphone is busy:
         // diary dictation suspends chat too, and reopening the panel mid-take
@@ -394,6 +399,7 @@ struct ChatView: View {
     @State private var selectedTab = 0
     /// True while a conversation is on screen instead of the Chats list.
     @State private var showingTranscript = false
+    @FocusState private var composerFocused: Bool
     @ObservedObject private var taskStore = TaskStore.shared
     @ObservedObject private var skillStore = SkillStore.shared
     @ObservedObject private var diaryStore = DiaryStore.shared
@@ -466,6 +472,10 @@ struct ChatView: View {
             selectedTab = requested
             state.requestedTab = nil
         }
+        .onChange(of: state.composerFocusToken) { _, _ in
+            // After the panel is key: SwiftUI ignores focus until the window is.
+            DispatchQueue.main.async { composerFocused = true }
+        }
         .sheet(item: $sheet) { kind in
             switch kind {
             case .ai:
@@ -537,6 +547,7 @@ struct ChatView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 26, weight: .light))
                 .lineLimit(1 ... 5)
+                .focused($composerFocused)
                 .onSubmit { state.send() }
                 .onChange(of: state.input) { _, _ in MascotController.shared.notifyKeystroke() }
 

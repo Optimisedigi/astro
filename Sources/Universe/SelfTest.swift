@@ -727,6 +727,14 @@ enum SelfTest {
               "speech: voice mode stays off when the user left it off")
         kokoro.voiceEnabled = restoreEnabled
 
+        // Shortcut-open must re-claim the composer so Cmd+V pastes without a click.
+        let focusState = ChatState()
+        let beforeFocus = focusState.composerFocusToken
+        focusState.panelDidOpen()
+        check(focusState.composerFocusToken == beforeFocus &+ 1,
+              "panel: opening bumps composer focus so paste lands in the field")
+        focusState.panelDidClose()
+
         let restoreSpeech = kokoro.speechEnabled
         kokoro.speechEnabled = false
         check(UserDefaults.standard.object(forKey: "kokoroSpeechEnabled") as? Bool == false,
