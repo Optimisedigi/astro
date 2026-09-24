@@ -140,7 +140,7 @@ enum NotchActivityIndicator {
             if let detail = latestDetail {
                 shimmerView.text = "(\(count)) \(detail)"
             } else {
-                shimmerView.text = "(\(count)) Tama processes active"
+                shimmerView.text = "(\(count)) Astro processes active"
             }
         }
     }
@@ -157,7 +157,7 @@ enum NotchActivityIndicator {
             if count == 1, let only = processes.values.first {
                 return only.detail ?? only.label
             } else if count > 1 {
-                return "(\(count)) Tama processes active"
+                return "(\(count)) Astro processes active"
             }
             return "Thinking…"
         }()

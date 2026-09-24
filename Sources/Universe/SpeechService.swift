@@ -420,20 +420,16 @@ final class SpeechService {
         endTalkingAnimation()
     }
 
-    // MARK: - Mascot / menubar sync
+    // MARK: - Menubar sync
 
-    /// The menubar mouth and the avatar both animate while audio is actually
-    /// playing, mirroring Tama's talking behaviour.
+    /// The menubar mouth animates while audio is actually playing, mirroring
+    /// Tama's talking behaviour.
     private func beginTalkingAnimation() {
         MenuBarMood.shared.setActivity(.speaking)
-        MascotController.shared.setState(.responding)
     }
 
     private func endTalkingAnimation() {
         if MenuBarMood.shared.mood == .speaking { MenuBarMood.shared.setActivity(nil) }
-        if MascotController.shared.currentState == .responding {
-            MascotController.shared.setState(.idle)
-        }
     }
 
     /// Speaks one block of text end to end. Streaming callers should use

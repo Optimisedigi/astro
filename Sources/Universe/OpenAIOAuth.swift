@@ -82,6 +82,15 @@ enum OpenAIOAuth {
         }
     }
 
+    /// A fresh access token plus the ChatGPT account it belongs to — the pair
+    /// every subscription-billed endpoint needs.
+    static func validCredentials() async throws -> (accessToken: String, accountId: String)? {
+        guard let token = try await validAccessToken(),
+              let accountId = TokenStore.load()?.accountId
+        else { return nil }
+        return (token, accountId)
+    }
+
     static func signOut() { TokenStore.clear() }
     static var isSignedIn: Bool { TokenStore.load() != nil }
 

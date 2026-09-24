@@ -99,7 +99,7 @@ enum NotchNotificationPresenter {
     static func showAgentReply(message: String, onTap: (() -> Void)? = nil) {
         logger.info("Showing toast agent reply")
         showToast(
-            title: "Universe",
+            title: "Astro",
             subtitle: message,
             duration: 6,
             customOnTap: onTap

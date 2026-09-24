@@ -8,7 +8,8 @@ import Network
 /// unlike Anthropic's paste-code flow the browser hands the code straight back to us.
 ///
 /// Security posture:
-///  - Binds loopback only, serves exactly one request, then closes. It is not a server.
+///  - Binds loopback only and closes as soon as the callback arrives. Stray requests
+///    (a browser's favicon fetch) get a 404 and do not end sign-in. It is not a server.
 ///  - `state` is compared before the code is accepted, so a request forged by another
 ///    local process (the port is reachable by anything on the machine) is rejected.
 ///  - The request is size-capped and only the query string is parsed; nothing is executed.
@@ -53,20 +54,26 @@ enum LoopbackOAuthServer {
                 connection.start(queue: .main)
                 // 8 KB is far more than a redirect needs; anything larger is not our callback.
                 connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, _ in
-                    defer { listener.cancel() }
                     guard let data, let request = String(data: data, encoding: .utf8) else {
                         connection.cancel()
                         return
                     }
 
                     let outcome = parseCallback(request, expectedPath: path, expectedState: expectedState)
-                    respond(on: connection, success: outcome.code != nil, message: outcome.error)
-
-                    guard once.claim() else { return }
-                    if let code = outcome.code {
+                    switch outcome {
+                    case .ignore:
+                        // Not the redirect: keep listening for the real one.
+                        respondNotFound(on: connection)
+                    case let .code(code):
+                        respond(on: connection, success: true, message: nil)
+                        listener.cancel()
+                        guard once.claim() else { return }
                         continuation.resume(returning: code)
-                    } else {
-                        continuation.resume(throwing: ServerError.cancelled(outcome.error ?? "no authorization code"))
+                    case let .failure(reason):
+                        respond(on: connection, success: false, message: reason)
+                        listener.cancel()
+                        guard once.claim() else { return }
+                        continuation.resume(throwing: ServerError.cancelled(reason))
                     }
                 }
             }
@@ -94,41 +101,54 @@ enum LoopbackOAuthServer {
         }
     }
 
-    /// Parses the request line of the browser's redirect.
+    /// What one incoming request means for the sign-in.
+    enum Callback: Equatable {
+        /// The redirect, carrying our state and an authorization code.
+        case code(String)
+        /// The redirect, but it failed: wrong state, or the provider reported an error.
+        case failure(String)
+        /// Some other request (favicon, malformed): answer 404 and keep waiting.
+        case ignore
+    }
+
+    /// Parses the request line of the browser's redirect, e.g.
+    /// `GET /auth/callback?code=…&state=… HTTP/1.1`.
     /// Returns a code only when the path matches and the state is exactly the one we issued.
     static func parseCallback(
         _ raw: String,
         expectedPath: String,
         expectedState: String
-    ) -> (code: String?, error: String?) {
-        guard let requestLine = raw.split(whereSeparator: \.isNewline).first,
-              let start = requestLine.range(of: " /"),
-              let end = requestLine.range(of: " HTTP"),
-              start.upperBound <= end.lowerBound else {
-            return (nil, "malformed request")
-        }
-
-        let target = String(requestLine[start.upperBound..<end.lowerBound])
-        guard let components = URLComponents(string: target) else { return (nil, "malformed callback URL") }
-        // Browsers also fetch /favicon.ico on the same port; ignore anything else.
-        guard components.path == expectedPath else { return (nil, "unexpected callback path") }
+    ) -> Callback {
+        guard let requestLine = raw.split(whereSeparator: \.isNewline).first else { return .ignore }
+        let parts = requestLine.split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count >= 3, parts[0] == "GET", parts[1].hasPrefix("/"),
+              let components = URLComponents(string: String(parts[1])),
+              components.path == expectedPath
+        else { return .ignore }
 
         let items = components.queryItems ?? []
         let state = items.first { $0.name == "state" }?.value ?? ""
         guard AnthropicOAuth.constantTimeEquals(state, expectedState) else {
-            return (nil, "state mismatch")
+            return .failure("state mismatch")
         }
         if let code = items.first(where: { $0.name == "code" })?.value, !code.isEmpty {
-            return (code, nil)
+            return .code(code)
         }
         let reason = items.first { $0.name == "error_description" }?.value
             ?? items.first { $0.name == "error" }?.value
-        return (nil, reason.map { String($0.prefix(200)) } ?? "no authorization code")
+        return .failure(reason.map { String($0.prefix(200)) } ?? "no authorization code")
+    }
+
+    private static func respondNotFound(on connection: NWConnection) {
+        let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in
+            connection.cancel()
+        })
     }
 
     private static func respond(on connection: NWConnection, success: Bool, message: String?) {
         let title = success ? "Signed in" : "Sign-in failed"
-        let detail = success ? "You can close this tab and go back to Universe." : (message ?? "Unknown error")
+        let detail = success ? "You can close this tab and go back to Astro." : (message ?? "Unknown error")
         // The detail can echo a provider string, so escape it rather than interpolating raw.
         let body = """
         <!doctype html><meta charset="utf-8"><title>\(title)</title>

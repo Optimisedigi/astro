@@ -1,4 +1,5 @@
 import SwiftUI
+import ThinkingOrbsKit
 
 /// Settings-sheet states asserted by `--render-states`.
 @MainActor
@@ -25,7 +26,36 @@ extension RenderStates {
                 .frame(width: 680, height: 58)
                 .environment(\.colorScheme, .dark)
                 .background(Color.black.opacity(0.85))
+                .orbFrozenTime(1.3)
             },
+            // A live voice call mid-sentence: your words in the box as if typed,
+            // red mic, minimise button and "Live voice" header.
+            State("panel-live-call", size: CGSize(width: 700, height: 580)) {
+                let open = ChatState()
+                let _ = open.showAsOpenForRendering()
+                ChatView(state: open, live: .forRendering([
+                    Session.Message(role: "user", text: "What's your name?"),
+                    Session.Message(role: "assistant", text: "I'm Astro. What can I do for you?"),
+                ], draft: "What's the weather going to be like in Sydney"))
+                    .orbFrozenTime(1.3)
+                    .beamFrozenTime(1.0)
+                    .frame(width: 700, height: 580)
+                    .background(Color.black)
+            },
+            // The real panel: orb and input row on top, the tabs box below with
+            // the border beam on its edge. ImageRenderer skips the text field and
+            // list contents. Beam frames need the Xcode build (its shader is
+            // compiled there); `swift build` renders no beam.
+            State("panel-beam", size: CGSize(width: 700, height: 580)) {
+                let open = ChatState()
+                let _ = open.showAsOpenForRendering()
+                ChatView(state: open)
+                    .orbFrozenTime(1.3)
+                    .beamFrozenTime(1.0)
+                    .frame(width: 700, height: 580)
+                    .background(Color.black)
+            },
+
             State("permissions-granted", size: CGSize(width: 420, height: 560)) {
                 sheet {
                     PermissionsBody(checker: PermissionsChecker(fixed: [

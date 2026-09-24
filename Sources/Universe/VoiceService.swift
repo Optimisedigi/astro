@@ -74,6 +74,9 @@ final class VoiceService: ObservableObject {
     /// service, so two live handlers would send the same utterance twice.
     var onCaptureComplete: ((String) -> Void)?
     var onAudioLevelChanged: ((Double) -> Void)?
+    /// Latest mic loudness, 0–1, while listening. Read per frame by the panel's
+    /// voice glow; separate from `onAudioLevelChanged`, which calls own.
+    private(set) var inputLevel: Double = 0
     var onPartialTranscript: ((String) -> Void)?
     var onError: ((String) -> Void)?
     var onFirstSpeech: (() -> Void)?
@@ -403,7 +406,9 @@ final class VoiceService: ObservableObject {
                 guard let self, self.state == .followUp else { return }
                 self.noteAudioLevel(rms: rms)
                 let threshold = max(self.minSpeechRMS, self.noiseFloorRMS * self.speechBoostFactor)
-                self.onAudioLevelChanged?(min(1.0, max(0.0, rms / threshold)))
+                let level = min(1.0, max(0.0, rms / threshold))
+                self.inputLevel = level
+                self.onAudioLevelChanged?(level)
             }
         }
 
@@ -472,6 +477,7 @@ final class VoiceService: ObservableObject {
     private func haltPipeline() {
         silenceTimer?.invalidate()
         silenceTimer = nil
+        inputLevel = 0
 
         recognitionTask?.cancel()
         recognitionTask = nil

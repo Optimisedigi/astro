@@ -1,4 +1,4 @@
-# Universe
+# Astro
 
 A native macOS menubar agent: ask a question with `⌥Space`, get a streaming answer,
 and let it act on your machine through tools.
@@ -15,13 +15,13 @@ full reverse-engineering notes that informed the architecture.
 | Streaming chat (Anthropic) | working |
 | Agent loop with bash/read/write/edit | working, workspace-contained |
 | Reminders + routines (cron & natural language) | working |
-| Voice in (SFSpeechRecognizer) / out (AVSpeechSynthesizer) | working |
-| Kokoro TTS via MLX | not started — `SpeechService` is the drop-in point |
+| Voice in (SFSpeechRecognizer) / out (Kokoro TTS via MLX) | working |
+| Notch voice calls, optionally on OpenAI live voice (ChatGPT plan) | built, not yet tested live |
 
 ## Run it
 
 ```sh
-swift build && .build/debug/Universe --selftest   # 30 checks, no API key needed
+swift build && .build/debug/Universe --selftest   # offline checks, no API key needed
 ```
 
 For the real app (the global hotkey needs a signed bundle):
@@ -29,8 +29,12 @@ For the real app (the global hotkey needs a signed bundle):
 ```sh
 xcodegen generate
 xcodebuild -project Universe.xcodeproj -scheme Universe -configuration Debug build
-open ~/Library/Developer/Xcode/DerivedData/Universe-*/Build/Products/Debug/Universe.app
+open ~/Library/Developer/Xcode/DerivedData/Universe-*/Build/Products/Debug/Astro.app
 ```
+
+The app was renamed from Universe to Astro. Code, the Xcode scheme, the bundle ID
+(`com.universe.app`), the Keychain service and the data folder keep the old name on
+purpose, so existing permissions, sign-ins and chats carry over.
 
 Add your Anthropic API key via the menubar → Settings. It is stored in the Keychain.
 
@@ -47,7 +51,14 @@ Sources/Universe/
   ScheduleParser.swift  "30m", "every 2h", "tomorrow 3pm", cron
   ScheduleStore.swift   JSON persistence, polling, notifications
   VoiceService.swift    speech in and out
+  ChatView.swift        panel UI: input row, voice glow, border beam, tabs
+  MascotView.swift      the thinking orb beside "Ask anything"
+  VoiceGlow.swift       sound-reactive glow (SwiftUI port of voice-glow)
+  OpenAIRealtimeCallSession.swift, GPTLive*.swift  OpenAI live voice calls
+  ChatGPTWebSearch.swift web search on the ChatGPT plan
   SelfTest.swift        offline verification of the whole loop
+Vendor/BorderBeamKit/   border beam (MIT, see VENDORED.md)
+Vendor/ThinkingOrbsKit/ Thinking orb (MIT, see VENDORED.md)
 ```
 
 Data lives in `~/Library/Application Support/Universe/`.
@@ -64,8 +75,9 @@ Data lives in `~/Library/Application Support/Universe/`.
 ./install.sh
 ```
 
-Builds Release, runs the self-test, and installs to `/Applications/Universe.app`.
-Ad-hoc signed, so it runs on the machine that built it; shipping to other Macs
-would need a Developer ID certificate and notarization.
+Builds Release, runs the self-test, and installs to `/Applications/Astro.app`. An old
+`Universe.app` is moved to the Trash. Signed with the local Apple Development
+certificate, so it runs on the machine that built it; shipping to other Macs would
+need a Developer ID certificate and notarization.
 
 Then: menubar icon → Settings → **Sign in with Claude**. Global hotkey is ⌥Space.

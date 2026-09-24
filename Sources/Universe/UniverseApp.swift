@@ -42,6 +42,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             exit(RenderStates.run(directory: CommandLine.arguments[i + 1]) ? 0 : 1)
         }
+        if let i = CommandLine.arguments.firstIndex(of: "--dictation-check") {
+            guard i + 2 < CommandLine.arguments.count else {
+                print("usage: Universe --dictation-check <audio file> <output file>")
+                exit(2)
+            }
+            exit(LiveDictation.runCheck(audioPath: CommandLine.arguments[i + 1],
+                                        outputPath: CommandLine.arguments[i + 2]) ? 0 : 1)
+        }
         guard claimSingleInstance() else { return }
 
         migrateLegacyDataDirectory()

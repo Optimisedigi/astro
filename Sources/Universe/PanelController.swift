@@ -94,6 +94,13 @@ final class PanelController {
         chatState.panelDidClose()
     }
 
+    /// Hide the panel but keep a live voice conversation going. The call's
+    /// waveform wing by the notch brings the panel (and transcript) back.
+    func minimize() {
+        chatState.keepCallThroughNextClose()
+        hide()
+    }
+
     func toggle() {
         if panel.isVisible {
             hide()

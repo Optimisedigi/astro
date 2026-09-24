@@ -137,10 +137,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let image = MenuBarIcon.create(mood: mood.mood, animationFrame: mood.animationFrame)
         image.isTemplate = true
         button.image = image
-        button.toolTip = isActive ? "Click to stop" : "Universe"
+        button.toolTip = isActive ? "Click to stop" : "Astro"
         button.setAccessibilityLabel(
-            isActive ? "Universe: \(mood.mood.rawValue). Click to stop."
-                : "Universe: \(mood.mood.rawValue)"
+            isActive ? "Astro: \(mood.mood.rawValue). Click to stop."
+                : "Astro: \(mood.mood.rawValue)"
         )
     }
 }

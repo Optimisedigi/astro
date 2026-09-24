@@ -50,8 +50,8 @@ struct RoutineListView: View {
                 .foregroundStyle(.tertiary)
             Text(kind == .reminder ? "No reminders yet" : "No routines yet")
                 .font(.headline)
-            Text(kind == .reminder ? "Ask Universe to remind you about something."
-                                   : "Ask Universe to create a routine.")
+            Text(kind == .reminder ? "Ask Astro to remind you about something."
+                                   : "Ask Astro to create a routine.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

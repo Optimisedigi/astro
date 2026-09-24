@@ -26,7 +26,7 @@ enum NotchCallButton {
 
     /// The live voice call, or nil when idle. Held for the duration of the call
     /// so `endCall()` can shut the same session down.
-    private static var callSession: CallSession?
+    private static var callSession: (any VoiceCallSession)?
 
     /// Whether the panel is temporarily hidden because a notch overlay is active.
     private static var isHiddenByOverlay = false
@@ -385,12 +385,16 @@ enum NotchCallButton {
     private static var isRequestingPermission = false
 
     /// Begin a call — switch icon to red disconnect, show the timer wing, and start the voice session.
-    private static func startCall() {
+    /// `stillWanted` is re-checked after the permission prompt, so a call the
+    /// user no longer wants (the panel that asked for it was closed) never starts.
+    /// Returns false only when nothing was started or queued.
+    @discardableResult
+    private static func startCall(greets: Bool = true, stillWanted: @escaping @MainActor () -> Bool = { true }) -> Bool {
         // Without the microphone the call would greet the user and then listen
         // to nothing, which looks like a hung call. Ask first, and only commit
         // to the call once access is granted.
         guard VoiceService.isAlreadyAuthorized else {
-            guard !isRequestingPermission else { return }
+            guard !isRequestingPermission else { return false }
             isRequestingPermission = true
             logger.info("Call requested without microphone access — requesting")
             Task { @MainActor in
@@ -401,22 +405,38 @@ enum NotchCallButton {
                     PanelController.shared.openSheet(.permissions)
                     return
                 }
-                beginCall()
+                guard stillWanted(), !isInCall else {
+                    logger.info("Call no longer wanted after permission prompt")
+                    return
+                }
+                beginCall(greets: greets)
             }
-            return
+            return true
         }
-        beginCall()
+        beginCall(greets: greets)
+        return true
     }
 
-    private static func beginCall() {
+    private static func beginCall(greets: Bool) {
         logger.info("Call started")
         isInCall = true
         updateLabel(disconnect: true)
         NotchCallTimer.show()
 
-        let session = CallSession()
+        let session = RealtimeVoiceSettings.shared.makeCallSession(greets: greets)
         callSession = session
+        LiveVoiceState.shared.setActive(!(session is CallSession))
         session.start()
+    }
+
+    /// Start a live call from the panel (shortcut or mic button). No greeting:
+    /// the user opened the panel to talk. `stillWanted` is checked again if a
+    /// permission prompt delays the start. Returns false when nothing started
+    /// (a call is already running or a permission prompt is already up).
+    @discardableResult
+    static func startCallFromPanel(stillWanted: @escaping @MainActor () -> Bool) -> Bool {
+        guard !isInCall else { return false }
+        return startCall(greets: false, stillWanted: stillWanted)
     }
 
     /// End a call — revert icon to white phone, hide the timer wing, and stop the voice session.
@@ -435,6 +455,7 @@ enum NotchCallButton {
 
         callSession?.end()
         callSession = nil
+        LiveVoiceState.shared.setActive(false)
     }
 
     /// Update the icon and tint based on call state.

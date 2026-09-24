@@ -85,7 +85,7 @@ final class KeepAwakeTool: TogglePanelTool {
         let result = IOPMAssertionCreateWithName(
             kIOPMAssertionTypeNoDisplaySleep as CFString,
             IOPMAssertionLevel(kIOPMAssertionLevelOn),
-            "Universe Keep Awake" as CFString,
+            "Astro Keep Awake" as CFString,
             &assertionID
         )
         if result == kIOReturnSuccess {

@@ -110,7 +110,7 @@ struct LoginView: View {
 
     private var signedInState: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Universe is using your Claude subscription.")
+            Text("Astro is using your Claude subscription.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Button("Sign out", action: model.signOut)

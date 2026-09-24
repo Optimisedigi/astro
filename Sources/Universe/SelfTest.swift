@@ -1,5 +1,6 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import AppKit
+import BorderBeamKit
 import CryptoKit
 import Foundation
 
@@ -189,8 +190,270 @@ enum SelfTest {
         // 13. Paste a path into Ask anything → Finder
         runFinderGoChecks(check: check)
 
+        // 14. OpenAI live voice + ChatGPT web search (pure logic only — no network)
+        await runLiveVoiceChecks(check: check)
+
+        // 15. OAuth browser redirect (ChatGPT / Gemini sign-in)
+        runLoopbackCallbackChecks(check: check)
+
         print(failures == 0 ? "\nSELFTEST PASSED" : "\nSELFTEST FAILED (\(failures) failures)")
         return failures == 0
+    }
+
+    /// The browser's redirect back to the app, parsed the way the loopback server sees it.
+    private static func runLoopbackCallbackChecks(check: (Bool, String) -> Void) {
+        func parse(_ line: String) -> LoopbackOAuthServer.Callback {
+            LoopbackOAuthServer.parseCallback("\(line)\r\nHost: localhost:1455\r\n\r\n",
+                                              expectedPath: "/auth/callback", expectedState: "s1")
+        }
+        check(parse("GET /auth/callback?code=abc&state=s1 HTTP/1.1") == .code("abc"),
+              "oauth: real browser redirect yields the code")
+        check(parse("GET /auth/callback?code=abc&scope=openid%20email&state=s1 HTTP/1.1") == .code("abc"),
+              "oauth: extra query items are fine")
+        check(parse("GET /favicon.ico HTTP/1.1") == .ignore,
+              "oauth: a stray browser request does not end sign-in")
+        check(parse("GET / HTTP/1.1") == .ignore, "oauth: a bare request does not end sign-in")
+        check(parse("GET /auth/callback?code=abc&state=forged HTTP/1.1") == .failure("state mismatch"),
+              "oauth: forged state is rejected")
+        check(parse("GET /auth/callback?error=access_denied&state=s1 HTTP/1.1") == .failure("access_denied"),
+              "oauth: provider error is reported")
+        check(parse("garbage") == .ignore, "oauth: malformed request is ignored")
+    }
+
+    @MainActor
+    private static func runLiveVoiceChecks(check: (Bool, String) -> Void) async {
+        let suite = "universe.selftest.livevoice"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let fresh = RealtimeVoiceSettings(defaults: defaults)
+        check(fresh.engine == .builtIn, "live voice is off by default")
+        check(fresh.model == "gpt-realtime-2.1" && fresh.voice == "marin", "live voice defaults: 2.1 + marin")
+        fresh.engine = .openAIRealtime
+        fresh.voice = "cedar"
+        let reloaded = RealtimeVoiceSettings(defaults: defaults)
+        check(reloaded.engine == .openAIRealtime && reloaded.voice == "cedar", "live voice choices persist")
+        defaults.set("not-a-model", forKey: "voiceCall.openai.model")
+        check(RealtimeVoiceSettings(defaults: defaults).model == "gpt-realtime-2.1", "unknown model falls back")
+        check(reloaded.makeCallSession() is OpenAIRealtimeCallSession, "toggle on → live session")
+        reloaded.model = GPTLiveProtocol.model
+        check(reloaded.voice == "cove", "switching to GPT‑Live 1 swaps to one of its own voices")
+        check(reloaded.makeCallSession() is GPTLiveCallSession, "GPT‑Live 1 → GPT‑Live session")
+        reloaded.voice = "sol"
+        check(RealtimeVoiceSettings(defaults: defaults).voice == "sol", "GPT‑Live voice persists")
+        reloaded.model = "gpt-realtime-2.1"
+        check(reloaded.voice == "marin", "switching back resets to a 2.1 voice")
+        reloaded.engine = .builtIn
+        check(reloaded.makeCallSession() is CallSession, "toggle off → built-in session")
+
+        // The assistant is called Astro everywhere it can be asked its name.
+        let callPrompt = buildCallSystemPrompt()
+        check(callPrompt.contains("You are Astro") && !callPrompt.contains("Tama"), "name: voice calls answer as Astro")
+        check(GPTLiveProtocol.instructions.contains("Your name is Astro"), "name: GPT‑Live answers as Astro")
+        check(ClaudeService.chatSystemPromptForTesting.contains("You are Astro"), "name: chat answers as Astro")
+
+        // Minimise hands a panel-started call to the notch instead of ending it.
+        let minimiseState = ChatState()
+        minimiseState.keepCallThroughNextClose()
+        minimiseState.panelDidClose()
+        check(!NotchCallButton.isInCall, "minimise: closing with nothing running starts nothing")
+
+        // Calls from the panel (⌥Space) skip the phone-call greeting; notch calls keep it.
+        reloaded.engine = .openAIRealtime
+        reloaded.model = "gpt-realtime-2.1"
+        let panelCall = reloaded.makeCallSession(greets: false) as? OpenAIRealtimeCallSession
+        let notchCall = reloaded.makeCallSession() as? OpenAIRealtimeCallSession
+        check(panelCall?.greetsOnConnect == false && notchCall?.greetsOnConnect == true,
+              "live voice: panel calls listen first, notch calls greet")
+        reloaded.engine = .builtIn
+        let liveState = LiveVoiceState.shared
+        let wasActive = liveState.isActive
+        liveState.setActive(true)
+        liveState.inputLevel = 0.7
+        liveState.setActive(false)
+        check(!liveState.isActive && liveState.inputLevel == 0, "live voice: ending a call resets the glow level")
+        liveState.setActive(wasActive)
+
+        // GPT‑Live 1 wire contract
+        let liveSession = GPTLiveProtocol.session(voice: "not-a-voice", persona: "Be Astro.")
+        check(liveSession["model"] as? String == "gpt-live-1-codex"
+            && ((liveSession["audio"] as? [String: Any])?["output"] as? [String: Any])?["voice"] as? String == "cove"
+            && (liveSession["delegation"] as? [String: Any])?["type"] as? String == "client",
+            "GPT‑Live session: model, safe voice, client delegation")
+        check((liveSession["instructions"] as? String)?.hasPrefix("Be Astro.") == true, "GPT‑Live keeps the persona")
+        let liveHeaders = GPTLiveProtocol.headers(accessToken: "t", accountId: "a", ids: .fresh())
+        check(liveHeaders["OpenAI-Alpha"] == "quicksilver=v2" && liveHeaders["chatgpt-account-id"] == "a"
+            && liveHeaders["Authorization"] == "Bearer t", "GPT‑Live headers")
+        check(GPTLiveProtocol.callId(location: "/v1/live/rtc_abc-1", sessionIdHeader: nil) == "rtc_abc-1",
+              "GPT‑Live call id from Location")
+        check(GPTLiveProtocol.callId(location: nil, sessionIdHeader: "rtc_x") == "rtc_x", "GPT‑Live call id fallback")
+        check(GPTLiveProtocol.callId(location: "/evil/../x", sessionIdHeader: "nope") == nil, "GPT‑Live rejects bad ids")
+        check(GPTLiveProtocol.sidebandURL(callId: "rtc_abc")?.absoluteString == "wss://api.openai.com/v1/live/rtc_abc"
+            && GPTLiveProtocol.sidebandURL(callId: "../x") == nil, "GPT‑Live sideband URL is contained")
+        check(GPTLiveProtocol.parse(#"{"type":"delegation.created","item":{"type":"delegation","target":"client","id":"d1","content":[{"type":"input_text","text":"weather?"}]}}"#)
+            == .delegation(id: "d1", prompt: "weather?"), "GPT‑Live parses delegations")
+        check(GPTLiveProtocol.parse(#"{"type":"turn.done","turn":{"role":"user","transcript":"hi"}}"#)
+            == .turnDone(role: "user", text: "hi"), "GPT‑Live parses turns")
+        check(GPTLiveProtocol.parse(#"{"type":"error","error":{"code":"token_expired","message":"x"}}"#)
+            == .error(message: "x", fatal: true), "GPT‑Live flags auth errors as fatal")
+        check(GPTLiveProtocol.parse("garbage") == .ignored, "GPT‑Live ignores junk")
+        let appends = GPTLiveProtocol.contextAppends(text: String(repeating: "é", count: 400), delegationId: "d1")
+        let appendTexts = appends.compactMap { (($0["content"] as? [[String: Any]])?.first?["text"] as? String) }
+        check(appends.count == 2 && appendTexts.allSatisfy { $0.utf8.count <= 500 } && appendTexts.joined().count == 400
+            && appends.allSatisfy { $0["delegation_item_id"] as? String == "d1" && $0["channel"] as? String == "speakable" },
+            "GPT‑Live answers are chunked without splitting characters")
+        check(GPTLiveProtocol.boundResult(String(repeating: "a", count: 5000)).count == 1_800, "GPT‑Live answers are capped")
+        defaults.removePersistentDomain(forName: suite)
+
+        let tools = OpenAIRealtimeCallSession.functionTools(from: ToolRegistry.callRegistry())
+        check(tools.contains { $0["name"] as? String == "end_call" }, "live voice can hang up")
+        check(tools.allSatisfy { $0["type"] as? String == "function" && $0["parameters"] != nil },
+              "live voice tools use the function shape")
+        let config = OpenAIRealtimeCallSession.sessionConfig(
+            model: "gpt-realtime-2.1", voice: "marin", instructions: "hi", tools: tools
+        )
+        let audio = config["audio"] as? [String: Any]
+        let output = audio?["output"] as? [String: Any]
+        let turn = (audio?["input"] as? [String: Any])?["turn_detection"] as? [String: Any]
+        check(config["type"] as? String == "realtime" && output?["voice"] as? String == "marin",
+              "live session config carries model type and voice")
+        check(turn?["interrupt_response"] as? Bool == true, "live voice lets the user interrupt")
+        // A voice-processed Mac mic reports 9 channels with the voice on channel 0.
+        // Downmixing them all sent OpenAI pure silence; the voice must survive.
+        // Formats with more than 2 channels need an explicit layout (the real mic
+        // supplies its own), so describe 9 discrete channels.
+        let micArray = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, interleaved: false,
+                                     channelLayout: AVAudioChannelLayout(
+                                         layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | 9)!)
+        let spoken = AVAudioPCMBuffer(pcmFormat: micArray, frameCapacity: 4_800)!
+        spoken.frameLength = 4_800
+        for i in 0..<4_800 { spoken.floatChannelData![0][i] = Float(sin(Double(i) * 2 * .pi * 300 / 48_000) * 0.5) }
+        let wire = AVAudioPCMBuffer(pcmFormat: AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24_000,
+                                                             channels: 1, interleaved: true)!, frameCapacity: 2_600)!
+        var fedOnce = false
+        _ = RealtimeAudioIO.makeMicrophoneConverter(from: micArray)?.convert(to: wire, error: nil) { _, status in
+            if fedOnce { status.pointee = .noDataNow; return nil }
+            fedOnce = true; status.pointee = .haveData; return spoken
+        }
+        let wirePeak = (0..<Int(wire.frameLength)).map { abs(Int(wire.int16ChannelData![0][$0])) }.max() ?? 0
+        check(wire.frameLength > 0 && wirePeak > 1_000, "live voice: multi-channel mic keeps the voice (not silence)")
+        let noise = (audio?["input"] as? [String: Any])?["noise_reduction"] as? [String: Any]
+        check(noise?["type"] as? String == "far_field", "live voice tunes noise reduction for a laptop mic")
+        check(JSONSerialization.isValidJSONObject(["session": config]), "live session config is valid JSON")
+
+        // Two tools in one turn → exactly one follow-up reply, after the response ends.
+        var turns = RealtimeTurnTracker()
+        turns.responseStarted()
+        turns.toolStarted()
+        turns.toolStarted()
+        let afterFirst = turns.toolFinished()
+        let afterSecond = turns.toolFinished()
+        check(!afterFirst && !afterSecond, "no reply requested while the model's response is still running")
+        check(turns.responseFinished(), "one reply requested once the response ends and all tools reported")
+        turns.responseRequested()
+        check(!turns.responseFinished(), "a normal reply ending does not trigger another one")
+        // Tool finishes after the response already ended → reply immediately.
+        turns.responseStarted()
+        turns.toolStarted()
+        check(!turns.responseFinished(), "response ending with a tool still running waits")
+        check(turns.toolFinished(), "last tool finishing after the response ends triggers the reply")
+
+        // Late user transcript still lands before the assistant reply.
+        var transcript = RealtimeTranscript()
+        transcript.reserveUser(itemId: "u1")
+        transcript.appendAssistant(" Sure, one sec. ")
+        transcript.fillUser(itemId: "u1", text: "what's the weather")
+        transcript.reserveUser(itemId: "u2") // never transcribed → dropped
+        let roles = transcript.messages.map { $0["role"] as? String ?? "" }
+        check(roles == ["user", "assistant"], "call transcript keeps real conversation order")
+        check(transcript.messages.first?["content"] as? String == "what's the weather", "late transcript fills its slot")
+
+        // Live display: your unfinished words stay in the box, not the conversation;
+        // once final they move down, in order. Astro's reply streams in below.
+        var streaming = RealtimeTranscript()
+        streaming.reserveUser(itemId: "u1")
+        streaming.appendUserDelta(itemId: "u1", delta: "what's")
+        streaming.appendUserDelta(itemId: "u1", delta: " the wea")
+        check(streaming.displayLines.isEmpty && streaming.userText(itemId: "u1") == "what's the wea",
+              "live transcript: unfinished words are held for the box, not shown below")
+        streaming.appendAssistantDelta("It's ")
+        let replyId = streaming.displayLines.first?.id
+        streaming.appendAssistantDelta("sunny.")
+        streaming.fillUser(itemId: "u1", text: "What's the weather?")
+        streaming.finishAssistant()
+        streaming.appendAssistantDelta("Anything else?")
+        let lines = streaming.displayLines
+        check(lines.map(\.text) == ["What's the weather?", "It's sunny.", "Anything else?"]
+            && lines.map(\.role) == ["user", "assistant", "assistant"],
+              "live transcript: final words move below in order, replacing partial words")
+        check(lines.dropFirst().first?.id == replyId, "live transcript: a reply keeps its id while it grows (no flicker)")
+
+        // The box: a new turn replaces the old one; finishing an older turn does not
+        // wipe the words of the one you are already saying.
+        let box = LiveVoiceState.makeForTesting()
+        box.setActive(true)
+        box.setDraft(itemId: "u1", text: "what's the")
+        box.setDraft(itemId: "u2", text: "and tomorrow")
+        box.clearDraft(itemId: "u1")
+        check(box.draft == "and tomorrow", "live box: an earlier turn finishing keeps the current words")
+        check(box.draft(for: "u2") == "and tomorrow" && box.draft(for: "u1").isEmpty,
+              "live box: a failed turn can fall back to its own words only")
+        box.clearDraft(itemId: "u2")
+        check(box.draft.isEmpty, "live box: clears once its turn moves below")
+        box.setDraft(itemId: "u3", text: "hello")
+        box.setActive(false)
+        check(box.draft.isEmpty, "live box: hanging up clears it")
+
+        // Apple dictation is fed the call's PCM16 audio as float samples, unchanged.
+        let pcmFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24_000, channels: 1, interleaved: true)!
+        let pcm = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: 3)!
+        pcm.frameLength = 3
+        pcm.int16ChannelData![0][0] = 16_384
+        pcm.int16ChannelData![0][1] = -32_768
+        pcm.int16ChannelData![0][2] = 0
+        let asFloat = LiveDictation.floatBuffer(from: pcm)
+        let floats = asFloat.map { buffer in (0..<3).map { buffer.floatChannelData![0][$0] } }
+        check(floats == [0.5, -1, 0] && asFloat?.format.sampleRate == 24_000,
+              "live box: call audio reaches dictation intact")
+
+        // The panel beam is turned up enough to see it move. Uses the beam
+        // library's own opacity maths and spec file, so this fails if the tuning
+        // stops reaching the rotating beam or the spec changes underneath it.
+        let stock = borderBeamLayerOpacities(.md, colorVariant: .colorful, theme: .dark)
+        let panel = borderBeamLayerOpacities(.md, colorVariant: .colorful, theme: .dark,
+                                             tuning: ChatView.beamTuning)
+        check(stock.stroke < 0.5 && stock.bloom < 0.5,
+              "beam: the library's stock md beam is faint (why it is tuned)")
+        check(min(1, panel.stroke) >= 0.95 && min(1, panel.bloom) >= 0.95 && min(1, panel.inner) >= 0.8,
+              "beam: stroke and bloom near full, inner glow at least 80%")
+
+        // The last second of call audio is held so a turn's first word is not lost.
+        let primed = LiveDictation()
+        let chunk = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: 2_400)!
+        chunk.frameLength = 2_400
+        for _ in 0..<30 { primed.append(pcm16: chunk) } // 3 s of audio, no turn started
+        let held = primed.prerollDurationForTesting
+        check(held >= 0.9 && held <= LiveDictation.prerollSeconds + 0.001,
+              "live box: keeps about the last second of audio to catch the first word")
+        primed.stop()
+        check(primed.prerollDurationForTesting == 0, "live box: hanging up drops the held audio")
+
+        let payloads = [
+            #"{"type":"response.output_text.delta","delta":"Rain "}"#,
+            #"{"type":"response.output_item.done","item":{"type":"web_search_call"}}"#,
+            #"{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"Rain likely today.","annotations":[{"type":"url_citation","url":"https://a.example","title":"A"},{"type":"url_citation","url":"https://a.example","title":"A"},{"type":"url_citation","url":"https://b.example","title":"B"}]}]}}"#,
+            "not json",
+        ]
+        let parsed = ChatGPTWebSearch.parse(eventPayloads: payloads, maxResults: 5)
+        check(parsed.answer == "Rain likely today.", "ChatGPT search prefers the final message text")
+        check(parsed.citations.map(\.url) == ["https://a.example", "https://b.example"], "ChatGPT search dedupes sources")
+        check(ChatGPTWebSearch.parse(eventPayloads: payloads, maxResults: 1).citations.count == 1,
+              "ChatGPT search caps sources at max_results")
+        let streamedOnly = ChatGPTWebSearch.parse(eventPayloads: [payloads[0]], maxResults: 5)
+        check(streamedOnly.answer == "Rain", "ChatGPT search falls back to streamed text")
+        let body = ChatGPTWebSearch.requestBody(query: "weather", maxResults: 5)
+        check((body["tools"] as? [[String: Any]])?.first?["type"] as? String == "web_search"
+            && body["store"] as? Bool == false && body["stream"] as? Bool == true,
+            "ChatGPT search asks for the hosted web_search tool")
     }
 
     private static func restoreDefault(_ value: Any?, forKey key: String) {
@@ -508,25 +771,33 @@ enum SelfTest {
         check(!moodState.mood.isActivity, "mood: clearing activity restores time of day")
         check(MenuBarMood.Mood.allCases.count == 10, "mood: all 10 Tama moods present")
 
-        // Speaking drives the talking animation on both mascots. Kokoro synthesis is
-        // asynchronous, so drive the animation hooks the way playback does.
+        // Speaking drives the menubar mouth. Kokoro synthesis is asynchronous,
+        // so drive the animation hooks the way playback does.
         MenuBarMood.shared.setActivity(.speaking)
-        MascotController.shared.setState(.responding)
         check(MenuBarMood.shared.mood == .speaking, "talking: menubar enters speaking (mouth animates)")
-        check(MascotController.shared.currentState == .responding, "talking: avatar enters responding cycle")
         SpeechService.shared.stop()
         check(MenuBarMood.shared.mood != .speaking, "talking: menubar leaves speaking on stop")
-        check(MascotController.shared.currentState == .idle, "talking: avatar returns to idle on stop")
 
-        // Mascot state machine (CLI build exercises the dependency-free path).
-        check(MascotState.allCases.count == 6, "mascot: all 6 Tama states present")
+        // The input-bar orb is always the wavy-band design the user picked.
         let mascot = MascotController.shared
-        mascot.setState(.waiting)
-        check(mascot.currentState == .waiting, "mascot: setState applies")
-        mascot.notifyKeystroke()
-        check(mascot.currentState == .typing, "mascot: keystroke enters typing")
-        mascot.setState(.idle)
-        check(mascot.currentState == .idle, "mascot: returns to idle")
+        check(MascotController.orbState == .composing, "orb: input bar shows the wavy-band orb")
+        mascot.pause()
+        check(mascot.isPaused, "orb: pauses with the panel")
+        mascot.resume()
+        check(!mascot.isPaused, "orb: resumes with the panel")
+
+        // Voice glow input chain: silence stays dark, speech rises, silence decays.
+        let glow = VoiceGlowParams.default
+        check(VoiceGlowDriver.step(envelope: 0, input: 0.005, dt: 0.1, params: glow) == 0,
+              "voice glow: sound under the gate stays dark")
+        var envelope = 0.0
+        for _ in 0..<20 { envelope = VoiceGlowDriver.step(envelope: envelope, input: 0.8, dt: 1.0 / 60, params: glow) }
+        let risen = envelope
+        check(risen > 0.3, "voice glow: talking lifts the glow")
+        for _ in 0..<60 { envelope = VoiceGlowDriver.step(envelope: envelope, input: 0, dt: 1.0 / 60, params: glow) }
+        check(envelope < risen && envelope > 0, "voice glow: falls back smoothly after talking")
+        check(VoiceGlowDriver.step(envelope: 0, input: 5, dt: 1, params: glow) <= 1,
+              "voice glow: loud input is capped")
 
         // Squircle icons used in list rows.
         let session = MenuBarIcon.sessionIcon(mood: .afternoon)
@@ -658,6 +929,12 @@ enum SelfTest {
         check(!ModelRegistry.selectableModels.isEmpty, "models: at least one selectable model")
         check(ModelRegistry.models(for: .anthropic).contains { $0.id == "claude-sonnet-5" },
               "models: new Sonnet 5 present")
+        check(ModelRegistry.models(for: .anthropic).contains { $0.id == "claude-opus-5-5" && $0.name == "Claude Opus 5.5" },
+              "models: Claude Opus 5.5 present")
+        let gpt6 = ModelRegistry.models(for: .openai).map(\.id)
+        check(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"].allSatisfy(gpt6.contains),
+              "models: GPT-6 Astra, Sol and Luna present")
+        check(gpt6.first == "gpt-6-sol", "models: GPT-6 Sol is the OpenAI fallback")
         check(ModelRegistry.models(for: .gemini).contains { $0.id == "gemini-3-pro-preview" },
               "models: new Gemini 3 Pro present")
         check(ModelRegistry.models(for: .kimi).contains { $0.id == "k3" },
@@ -875,9 +1152,9 @@ enum SelfTest {
     /// A stale DerivedData build once swallowed every launch of a freshly
     /// installed app, so the installed copy must always outrank a build folder.
     static func runSingleInstanceChecks(check: (Bool, String) -> Void) {
-        let installed = URL(fileURLWithPath: "/Applications/Universe.app")
+        let installed = URL(fileURLWithPath: "/Applications/Astro.app")
         let derived = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/Developer/Xcode/DerivedData/Universe-abc/Build/Products/Debug/Universe.app")
+            .appendingPathComponent("Library/Developer/Xcode/DerivedData/Universe-abc/Build/Products/Debug/Astro.app")
 
         check(AppDelegate.isInstalledCopy(installed), "instance: /Applications copy is recognised as installed")
         check(!AppDelegate.isInstalledCopy(derived), "instance: DerivedData build is not treated as installed")

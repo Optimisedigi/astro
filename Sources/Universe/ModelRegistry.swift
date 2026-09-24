@@ -29,8 +29,8 @@ enum AIProvider: String, Codable, CaseIterable, Identifiable {
 
     var summary: String {
         switch self {
-        case .anthropic: return "Claude Sonnet 5 / Haiku 4.5 (via Claude account)"
-        case .openai: return "GPT-5.5, Codex"
+        case .anthropic: return "Claude Opus 5.5 / Sonnet 5 (via Claude account)"
+        case .openai: return "GPT-6 Astra / Sol / Luna (via ChatGPT account)"
         case .gemini: return "Gemini 3 Pro / Flash (via Google account)"
         case .kimi: return "Kimi K3 / For Coding (subscription)"
         case .moonshot: return "Kimi K2.6 (API key)"
@@ -59,11 +59,14 @@ struct ModelInfo: Identifiable, Hashable {
 final class ModelRegistry: ObservableObject {
     static let shared = ModelRegistry()
 
-    /// Anthropic IDs match the learning-ai site's catalog (verified Aug 2026);
-    /// the rest carry tama-agent's IDs forward.
+    /// Anthropic and OpenAI IDs checked against the vendors' model pages on
+    /// 24 Sep 2026 (`claude-opus-5-5`; `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`).
+    /// The rest carry tama-agent's IDs forward.
     static let models: [ModelInfo] = [
         // Anthropic
         .init(id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: .anthropic,
+              contextWindow: 1_000_000, maxOutputTokens: 64_000),
+        .init(id: "claude-opus-5-5", name: "Claude Opus 5.5", provider: .anthropic,
               contextWindow: 1_000_000, maxOutputTokens: 64_000),
         .init(id: "claude-opus-5", name: "Claude Opus 5", provider: .anthropic,
               contextWindow: 1_000_000, maxOutputTokens: 64_000),
@@ -71,12 +74,15 @@ final class ModelRegistry: ObservableObject {
               contextWindow: 200_000, maxOutputTokens: 64_000),
         .init(id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: .anthropic,
               contextWindow: 1_000_000, maxOutputTokens: 64_000),
-        // OpenAI
+        // OpenAI (ChatGPT plan). Sol first: it is the fallback for OpenAI and
+        // is on every paid plan; Astra needs Plus or above, Luna is the fast tier.
+        .init(id: "gpt-6-sol", name: "GPT-6 Sol", provider: .openai,
+              contextWindow: 1_050_000, maxOutputTokens: 128_000),
+        .init(id: "gpt-6-astra", name: "GPT-6 Astra", provider: .openai,
+              contextWindow: 1_050_000, maxOutputTokens: 128_000),
+        .init(id: "gpt-6-luna", name: "GPT-6 Luna", provider: .openai,
+              contextWindow: 1_050_000, maxOutputTokens: 128_000),
         .init(id: "gpt-5.5", name: "GPT-5.5", provider: .openai,
-              contextWindow: 400_000, maxOutputTokens: 128_000),
-        .init(id: "gpt-5.5-pro", name: "GPT-5.5 Pro", provider: .openai,
-              contextWindow: 400_000, maxOutputTokens: 128_000),
-        .init(id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: .openai,
               contextWindow: 400_000, maxOutputTokens: 128_000),
         // Google
         .init(id: "gemini-3-pro-preview", name: "Gemini 3 Pro (Preview)", provider: .gemini,

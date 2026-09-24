@@ -1,3 +1,4 @@
+import BorderBeamKit
 import SwiftUI
 
 @MainActor
@@ -61,7 +62,11 @@ final class ChatState: ObservableObject {
 
     /// Whether the panel is on screen. The microphone may only be open while
     /// this is true, so the mic indicator tracks the window exactly.
-    private(set) var panelVisible = false
+    @Published private(set) var panelVisible = false
+
+    /// `--render-states` only: draws the panel as open (so the border beam
+    /// renders) without `panelDidOpen()`'s side effects, such as the microphone.
+    func showAsOpenForRendering() { panelVisible = true }
 
     /// Bumped on every open so the composer re-claims keyboard focus. A bool
     /// stays true across hide/show, which leaves Cmd+V going to the previous app.
@@ -76,7 +81,13 @@ final class ChatState: ObservableObject {
         // suspension left by a stop click. Not while the microphone is busy:
         // diary dictation suspends chat too, and reopening the panel mid-take
         // must not steal its handlers.
-        if !voice.isListening { voiceModeSuspended = false }
+        if !voice.isListening, !NotchCallButton.isInCall { voiceModeSuspended = false }
+        // With OpenAI live voice on, opening the panel with the mic on starts a
+        // live conversation instead of the old dictation.
+        if usesLiveVoice {
+            if voiceMode, !NotchCallButton.isInCall { startLiveCallFromPanel() }
+            return
+        }
         guard voiceMode, !voiceModeSuspended else { return }
         // Load the Kokoro model now, off the main thread. Otherwise the first
         // sentence of the first reply pays for the model load, which is long
@@ -91,6 +102,12 @@ final class ChatState: ObservableObject {
     /// immediately — a hidden window must never hold the input device open.
     func panelDidClose() {
         panelVisible = false
+        // A live conversation the panel opened ends with it, like dictation.
+        // Calls started from the notch keep running.
+        if panelStartedCall {
+            panelStartedCall = false
+            if NotchCallButton.isInCall { NotchCallButton.endCall() }
+        }
         voice.stopListening()
         // `shutdown()`, not `stop()`: stop() leaves the playback engine running,
         // holding an audio device open behind a dismissed window.
@@ -123,6 +140,53 @@ final class ChatState: ObservableObject {
         voice.onError = { [weak self] message in
             self?.errorMessage = message
             self?.voice.stopListening()
+        }
+    }
+
+    /// True when OpenAI live voice is switched on in Voice Settings.
+    var usesLiveVoice: Bool { RealtimeVoiceSettings.shared.engine == .openAIRealtime }
+
+    /// True while a live conversation the panel started is running (or waiting
+    /// on the mic permission prompt), so closing the panel ends it, and only it.
+    private var panelStartedCall = false
+
+    /// Minimise: the next close hands the panel's live call over to the notch
+    /// (it keeps running, like a notch call) instead of ending it.
+    func keepCallThroughNextClose() {
+        panelStartedCall = false
+    }
+
+    private func startLiveCallFromPanel() {
+        // If a permission prompt delays the start, only go ahead if the panel
+        // is still open: a hidden window must never hold the microphone.
+        panelStartedCall = NotchCallButton.startCallFromPanel { [weak self] in
+            self?.panelVisible == true && self?.panelStartedCall == true
+        }
+    }
+
+    /// The panel's mic button. With live voice on it starts or stops a live
+    /// GPT conversation (the same session as a notch call) and remembers the
+    /// choice, so ⌥Space starts talking next time; otherwise it toggles the
+    /// built-in dictation.
+    func toggleMic() {
+        if usesLiveVoice {
+            // Free the mic from any dictation left running from before.
+            voice.stopListening()
+            speech.stop()
+            if NotchCallButton.isInCall {
+                // Only a conversation the panel started changes the remembered
+                // choice; hanging up a notch call leaves ⌥Space behaviour alone.
+                if panelStartedCall { voiceMode = false }
+                panelStartedCall = false
+                NotchCallButton.endCall()
+            } else {
+                voiceMode = true
+                startLiveCallFromPanel()
+            }
+        } else if voiceMode {
+            disableVoiceMode()
+        } else {
+            enableVoiceMode()
         }
     }
 
@@ -164,7 +228,7 @@ final class ChatState: ObservableObject {
     func resumeVoiceModeIfSuspended() {
         guard voiceModeSuspended else { return }
         voiceModeSuspended = false
-        guard voiceMode, panelVisible, VoiceService.isAlreadyAuthorized else { return }
+        guard voiceMode, panelVisible, !usesLiveVoice, VoiceService.isAlreadyAuthorized else { return }
         wireUtteranceHandler()
         try? voice.startListening()
     }
@@ -186,7 +250,7 @@ final class ChatState: ObservableObject {
             while speech.isSpeaking { try? await Task.sleep(for: .milliseconds(200)) }
             // A stop click suspends mid-reply; reopening the mic here would
             // undo the silence the user just asked for.
-            if voiceMode, panelVisible, !voiceModeSuspended { try? voice.startListening() }
+            if voiceMode, panelVisible, !voiceModeSuspended, !usesLiveVoice { try? voice.startListening() }
         }
     }
 
@@ -311,7 +375,6 @@ final class ChatState: ObservableObject {
         session.updatedAt = Date()
         isStreaming = true
         MenuBarMood.shared.setActivity(.thinking)
-        MascotController.shared.setState(.waiting)
 
         let vision = ModelRegistry.shared.selectedModel.supportsVision
         let apiMessages: [[String: Any]] = session.messages.dropLast().map {
@@ -345,7 +408,6 @@ final class ChatState: ObservableObject {
                     if firstToken {
                         firstToken = false
                         MenuBarMood.shared.setActivity(.responding)
-                        MascotController.shared.setState(.responding)
                     }
                     self.queue.append(delta)
                     if speak { self.speech.feedChunk(delta) }
@@ -360,14 +422,6 @@ final class ChatState: ObservableObject {
                         PanelController.shared.show()
                     }
                 }
-                // Brief happy beat, then settle back to idle (matches tama-agent).
-                MascotController.shared.setState(.happy)
-                Task {
-                    try? await Task.sleep(for: .seconds(2))
-                    if MascotController.shared.currentState == .happy {
-                        MascotController.shared.setState(.idle)
-                    }
-                }
                 if speak {
                     // Waits for queued audio to drain, so the microphone
                     // reopens only once she has actually stopped talking.
@@ -379,7 +433,6 @@ final class ChatState: ObservableObject {
                 if speak { speech.stop() }
                 errorMessage = error.localizedDescription
                 MenuBarMood.shared.setActivity(.error)
-                MascotController.shared.setState(.thinking)
                 // Show the error face briefly, then return to time-of-day.
                 Task {
                     try? await Task.sleep(for: .seconds(4))
@@ -403,20 +456,37 @@ struct ChatView: View {
     @ObservedObject private var taskStore = TaskStore.shared
     @ObservedObject private var skillStore = SkillStore.shared
     @ObservedObject private var diaryStore = DiaryStore.shared
+    @ObservedObject private var voice = VoiceService.shared
+    @ObservedObject private var live: LiveVoiceState
+    @ObservedObject private var realtime = RealtimeVoiceSettings.shared
 
-    /// Tama's tab set, plus Diary — which is local-only and never reaches a model.
-    private let tabLabels = ["Chats", "Diary", "Reminders", "Routines", "Tasks", "Skills", "Tools"]
+    /// `live` is injectable only so `--render-states` can draw a call on screen.
+    @MainActor
+    init(state: ChatState, live: LiveVoiceState? = nil) {
+        _state = ObservedObject(wrappedValue: state)
+        _live = ObservedObject(wrappedValue: live ?? .shared)
+    }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Index of the Diary tab, so callers outside the view don't hardcode it.
-    static let diaryTabIndex = 1
+    /// Matches the panel's own corners, so the box (and its beam) run right to
+    /// the panel's left, right and bottom edges.
+    private static let contentBoxRadius: CGFloat = 16
 
-    var body: some View {
+    /// Multipliers on the beam's layer opacities (each is capped at 1).
+    static let beamTuning = BeamTuning(strokeOpacity: 3.8, innerOpacity: 2.0, bloomOpacity: 4.0)
+
+    private var liveModelName: String {
+        RealtimeVoiceSettings.models.first { $0.id == realtime.model }?.name ?? realtime.model
+    }
+
+    /// Red mic: a live conversation is running (live voice on) or dictation is
+    /// on (live voice off).
+    private var micIsOn: Bool {
+        realtime.engine == .openAIRealtime ? live.isActive : state.voiceMode
+    }
+
+    private var contentBox: some View {
         VStack(spacing: 0) {
-            // Tama's layout: input row on top, tabs below it, lists under that.
-            inputRow
-
-            Divider().padding(.horizontal, 20)
-
             HStack {
                 AnimatedTabBar(labels: tabLabels, selectedIndex: $selectedTab)
                 Spacer(minLength: 0)
@@ -428,7 +498,9 @@ struct ChatView: View {
             // Tab content
             switch selectedTab {
             case 0:
-                if showingTranscript {
+                // A live call always shows its conversation, including when the
+                // panel is reopened from the notch after minimising.
+                if showingTranscript || live.isActive {
                     transcript
                 } else {
                     SessionListView(store: state.store) { session in
@@ -454,6 +526,47 @@ struct ChatView: View {
                 EmptyView()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.white.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: Self.contentBoxRadius))
+        // A constant glow riding the box's edge. The library's `md` defaults
+        // (stroke 0.26, inner 0.42, bloom 0.24 opacity) were too faint to see
+        // move, so every layer is turned up to about full, with brighter and
+        // more saturated colour. The rotating beam ignores Reduce Motion on its
+        // own, so it is switched off here instead, and it stops drawing while
+        // the panel is hidden.
+        .borderBeam(.md, colorVariant: .colorful, theme: .dark,
+                    active: state.panelVisible && !reduceMotion,
+                    borderRadius: Self.contentBoxRadius,
+                    brightness: 2.0, saturation: 1.6,
+                    tuning: Self.beamTuning)
+    }
+
+    /// Tama's tab set, plus Diary — which is local-only and never reaches a model.
+    private let tabLabels = ["Chats", "Diary", "Reminders", "Routines", "Tasks", "Skills", "Tools"]
+
+    /// Index of the Diary tab, so callers outside the view don't hardcode it.
+    static let diaryTabIndex = 1
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Tama's layout: input row on top, tabs below it, lists under that.
+            // The voice glow rises along the row's bottom edge as you talk, and
+            // gathers into a travelling beam while a reply is being worked on.
+            VoiceGlow(level: { max(VoiceService.shared.inputLevel, LiveVoiceState.shared.inputLevel) },
+                      processing: state.isStreaming,
+                      active: state.panelVisible && (voice.isListening || live.isActive || state.isStreaming),
+                      cornerRadius: 0) {
+                inputRow
+            }
+
+            // Tabs and their content sit in their own box under the input row,
+            // running to the panel's left, right and bottom edges, with the
+            // border beam riding that box's edge. The box's top edge is the
+            // separator, so there is no divider line.
+            contentBox
+                .padding(.top, 6)
+        }
         .frame(width: 680, height: 560)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -461,6 +574,15 @@ struct ChatView: View {
         .onChange(of: state.isStreaming) { _, streaming in
             // Sending a prompt swaps the list for the live conversation (Tama behavior).
             if streaming { selectedTab = 0; showingTranscript = true }
+        }
+        .onChange(of: live.isActive) { _, active in
+            // A live voice call shows its transcript as it happens.
+            if active { selectedTab = 0; showingTranscript = true }
+        }
+        .onChange(of: live.draft.isEmpty) { _, empty in
+            // Your spoken words replace the text field while you talk (anything
+            // typed is kept in `state.input`); give the field its focus back after.
+            if empty, state.panelVisible { DispatchQueue.main.async { composerFocused = true } }
         }
         .onChange(of: state.requestedSheet) { _, requested in
             guard let requested else { return }
@@ -495,7 +617,19 @@ struct ChatView: View {
     private var chatBody: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                if state.session.messages.isEmpty {
+                if live.isActive {
+                    // A live voice conversation: what you said and what GPT said,
+                    // word by word as it arrives.
+                    if live.transcript.isEmpty {
+                        Text("Listening…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 60)
+                    } else {
+                        MessageListView(messages: live.transcript)
+                    }
+                } else if state.session.messages.isEmpty {
                     EmptyChatView(needsSignIn: state.needsSignIn) { SettingsWindowController.shared.show() }
                         .padding(.top, 60)
                 } else {
@@ -510,6 +644,11 @@ struct ChatView: View {
             }
             .onChange(of: state.session.messages.last?.text) { _, _ in
                 if let last = state.session.messages.last {
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+            }
+            .onChange(of: live.transcript.last?.text) { _, _ in
+                if let last = live.transcript.last {
                     withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
             }
@@ -534,7 +673,7 @@ struct ChatView: View {
     }
 
     private var inputControls: some View {
-        // Top-aligned so the mascot and mic stay put as the text grows downward.
+        // Top-aligned so the orb and mic stay put as the text grows downward.
         HStack(alignment: .top, spacing: 10) {
             MascotBadge()
 
@@ -542,23 +681,53 @@ struct ChatView: View {
             // utterance in here, and a single line hid everything but the tail.
             // Capped at 5 lines so a long ramble scrolls rather than swallowing
             // the panel.
-            TextField(state.pendingAttachments.isEmpty ? "Ask anything…" : "Ask about this image…",
-                      text: $state.input, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 26, weight: .light))
-                .lineLimit(1 ... 5)
-                .focused($composerFocused)
-                .onSubmit { state.send() }
-                .onChange(of: state.input) { _, _ in MascotController.shared.notifyKeystroke() }
+            if live.isActive, !live.draft.isEmpty {
+                // On a live call, what you are saying appears here as if typed,
+                // then moves down into the conversation once the turn is done.
+                Text(live.draft)
+                    .font(.system(size: 26, weight: .light))
+                    .lineLimit(1 ... 5)
+                    .truncationMode(.head)
+                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                    .accessibilityLabel("You're saying: \(live.draft)")
+            } else {
+                TextField(state.pendingAttachments.isEmpty ? "Ask anything…" : "Ask about this image…",
+                          text: $state.input, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 26, weight: .light))
+                    .lineLimit(1 ... 5)
+                    .focused($composerFocused)
+                    .onSubmit { state.send() }
+            }
 
-            Button(action: { state.voiceMode ? state.disableVoiceMode() : state.enableVoiceMode() }) {
-                Image(systemName: state.voiceMode ? "mic.fill" : "mic")
+            Button(action: { state.toggleMic() }) {
+                Image(systemName: micIsOn ? "mic.fill" : "mic")
                     .font(.system(size: 16))
-                    .foregroundStyle(state.voiceMode ? Color.red : .secondary)
+                    .foregroundStyle(micIsOn ? Color.red : .secondary)
                     .frame(width: 22, height: 40)
             }
             .buttonStyle(.plain)
-            .help("Toggle voice mode")
+            .help(realtime.engine == .openAIRealtime
+                ? (live.isActive ? "End live voice" : "Talk with OpenAI live voice")
+                : "Toggle voice mode")
+            .accessibilityLabel(realtime.engine == .openAIRealtime
+                ? (live.isActive ? "End live voice" : "Start live voice")
+                : "Voice mode")
+
+            if live.isActive {
+                // Hide the panel but keep talking; the waveform by the notch
+                // brings it back.
+                Button(action: { PanelController.shared.minimize() }) {
+                    Image(systemName: "minus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.6))
+                        .frame(width: 22, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Minimise and keep talking")
+                .accessibilityLabel("Minimise and keep talking")
+            }
 
             Button(action: { PanelController.shared.hide() }) {
                 Image(systemName: "xmark")
@@ -578,16 +747,23 @@ struct ChatView: View {
     private var transcript: some View {
         VStack(spacing: 0) {
             HStack {
-                Button {
-                    showingTranscript = false
-                } label: {
-                    Label("Chats", systemImage: "chevron.left")
+                if live.isActive {
+                    // No way back to the list mid-call: the conversation is live.
+                    Label("Live voice", systemImage: "waveform")
                         .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button {
+                        showingTranscript = false
+                    } label: {
+                        Label("Chats", systemImage: "chevron.left")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
                 Spacer()
-                Text(registry.selectedModel.name)
+                Text(live.isActive ? liveModelName : registry.selectedModel.name)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -612,7 +788,7 @@ struct ScheduleListView: View {
     var body: some View {
         ScrollView {
             if store.jobs.isEmpty {
-                Text("No reminders yet. Ask Tama to set one for you.")
+                Text("No reminders yet. Ask Astro to set one for you.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
@@ -665,8 +841,8 @@ struct EmptyChatView: View {
             Text(needsSignIn ? "Sign in to Claude" : "Ask anything")
                 .font(.headline)
             Text(needsSignIn
-                 ? "Universe uses your Claude subscription. No API key needed."
-                 : "Universe can read files, run commands and remind you later.")
+                 ? "Astro uses your Claude subscription. No API key needed."
+                 : "Astro can read files, run commands and remind you later.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

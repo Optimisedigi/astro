@@ -27,6 +27,7 @@ struct VoiceSettingsView: View {
 struct VoiceSettingsBody: View {
     @ObservedObject var state: ChatState
     @ObservedObject private var kokoro = KokoroManager.shared
+    @ObservedObject private var realtime = RealtimeVoiceSettings.shared
     @State private var previewingVoice: String?
 
     init(state: ChatState) { self.state = state }
@@ -40,6 +41,8 @@ struct VoiceSettingsBody: View {
             voiceModeRow
             Divider()
             spokenRepliesRow
+            Divider()
+            liveVoiceSection
             Divider()
 
             modelRow
@@ -107,6 +110,53 @@ struct VoiceSettingsBody: View {
                 .toggleStyle(.switch)
         }
         .accessibilityElement(children: .combine)
+    }
+
+    /// Calls from the notch can run on OpenAI's live speech-to-speech model,
+    /// paid for by the user's ChatGPT plan instead of the built-in pipeline.
+    private var liveVoiceSection: some View {
+        let isOn = realtime.engine == .openAIRealtime
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: isOn ? "waveform.circle.fill" : "waveform.circle")
+                    .foregroundStyle(isOn ? Color.accentColor : .secondary)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("OpenAI live voice for calls").fontWeight(.semibold)
+                    Text(isOn
+                        ? "Calls talk to OpenAI's live voice on your ChatGPT plan — you can interrupt anytime"
+                        : "Calls use the built-in voice below")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("OpenAI live voice for calls", isOn: Binding(
+                    get: { isOn },
+                    set: { realtime.engine = $0 ? .openAIRealtime : .builtIn }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+            }
+            .accessibilityElement(children: .combine)
+
+            if isOn {
+                if !OpenAIOAuth.isSignedIn {
+                    Label("Sign in with ChatGPT in AI Settings to use this.", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                Picker("Model", selection: $realtime.model) {
+                    ForEach(RealtimeVoiceSettings.models) { option in
+                        Text("\(option.name) — \(option.detail)").tag(option.id)
+                    }
+                }
+                Picker("Voice", selection: $realtime.voice) {
+                    ForEach(RealtimeVoiceSettings.voices(for: realtime.model)) { option in
+                        Text(option.detail.isEmpty ? option.name : "\(option.name) — \(option.detail)").tag(option.id)
+                    }
+                }
+            }
+        }
     }
 
     /// Kokoro ships as a downloadable model; nothing can speak until it lands.

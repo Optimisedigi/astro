@@ -455,7 +455,7 @@ enum ScreenshotToolError: LocalizedError {
         switch self {
         case .permissionDenied:
             "Screen Recording permission is not granted. "
-                + "Enable it in System Settings → Privacy & Security → Screen Recording, then restart Tama."
+                + "Enable it in System Settings → Privacy & Security → Screen Recording, then restart Astro."
         case .noDisplay:
             "No display available to capture."
         case let .captureFailed(reason):

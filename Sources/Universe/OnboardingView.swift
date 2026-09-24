@@ -101,7 +101,7 @@ struct OnboardingView: View {
 
     private var header: some View {
         HStack {
-            Text("Welcome to Universe")
+            Text("Welcome to Astro")
                 .font(.headline)
             Spacer()
             Text("Step \(model.currentStep + 1) of \(model.outstanding.count)")
@@ -165,7 +165,7 @@ struct OnboardingView: View {
             Text("You're all set")
                 .font(.title2.bold())
 
-            Text("Universe is ready. You can change permissions anytime from the menubar.")
+            Text("Astro is ready. You can change permissions anytime from the menubar.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -173,7 +173,7 @@ struct OnboardingView: View {
 
             Spacer()
 
-            Button("Start using Universe", action: onDone)
+            Button("Start using Astro", action: onDone)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .padding(.bottom, 24)

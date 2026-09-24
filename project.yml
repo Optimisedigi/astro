@@ -4,9 +4,8 @@ options:
   deploymentTarget:
     macOS: "15.0"
 packages:
-  RiveRuntime:
-    url: https://github.com/rive-app/rive-ios
-    from: "6.20.3"
+  ThinkingOrbsKit:
+    path: Vendor/ThinkingOrbsKit
   kokoro-ios:
     url: https://github.com/mlalma/kokoro-ios.git
     from: "1.0.11"
@@ -16,6 +15,11 @@ packages:
   MLXUtilsLibrary:
     url: https://github.com/mlalma/MLXUtilsLibrary.git
     exactVersion: "0.0.6"
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    exactVersion: "153.0.0"
+  BorderBeamKit:
+    path: Vendor/BorderBeamKit
 settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.universe.app
@@ -36,18 +40,22 @@ targets:
         buildPhase: resources
       - path: Resources/notification.mp3
         buildPhase: resources
-      - path: Resources/avatar_pack.riv
-        buildPhase: resources
       - path: Resources/AppIcon.icns
         buildPhase: resources
     dependencies:
-      - package: RiveRuntime
+      - package: ThinkingOrbsKit
       - package: kokoro-ios
         product: KokoroSwift
         embed: true
       - package: mlx-swift
         product: MLX
       - package: MLXUtilsLibrary
+      - package: WebRTC
+      - package: BorderBeamKit
     settings:
       base:
+        # The app is called Astro. The bundle ID, Keychain service and data
+        # folder keep their original "universe" names on purpose: changing them
+        # would drop macOS permissions, sign-ins and saved chats.
         PRODUCT_BUNDLE_IDENTIFIER: com.universe.app
+        PRODUCT_NAME: Astro

@@ -436,6 +436,18 @@ enum NotchCallTimer {
 private final class FlippedCallTimerView: NSView {
     override var isFlipped: Bool { true }
 
+    // The waveform wing only shows during a call, so it doubles as the way back
+    // to a minimised call: clicking it reopens the panel and its transcript.
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with _: NSEvent) {
+        MainActor.assumeIsolated { PanelController.shared.show() }
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
     override func makeBackingLayer() -> CALayer {
         let layer = CALayer()
         layer.isGeometryFlipped = true

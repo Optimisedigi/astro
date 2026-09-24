@@ -6,8 +6,9 @@ private let logger = Logger(
     category: "tool.search"
 )
 
-/// Agent tool that searches the web by scraping search engine HTML pages.
-/// Uses DuckDuckGo as the primary engine with Brave and Google as fallbacks.
+/// Agent tool that searches the web. Uses OpenAI's hosted search on the user's
+/// ChatGPT plan when signed in; otherwise scrapes search engine HTML pages, with
+/// DuckDuckGo as the primary engine and Brave and Google as fallbacks.
 final class WebSearchTool: AgentTool, @unchecked Sendable {
     let name = "web_search"
 
@@ -72,6 +73,17 @@ final class WebSearchTool: AgentTool, @unchecked Sendable {
 
         let maxResults = min((args["max_results"] as? NSNumber)?.intValue ?? 5, 20)
         logger.info("Web search: \"\(query, privacy: .public)\", maxResults: \(maxResults)")
+
+        // Prefer OpenAI's hosted search on the user's ChatGPT plan; fall back to
+        // scraping when not signed in or when it fails.
+        if OpenAIOAuth.isSignedIn {
+            do {
+                let result = try await ChatGPTWebSearch.search(query: query, maxResults: maxResults)
+                return ChatGPTWebSearch.format(result, query: query)
+            } catch {
+                logger.warning("ChatGPT search failed, falling back: \(error.localizedDescription, privacy: .public)")
+            }
+        }
 
         let (results, engine) = await performSearch(query: query, maxResults: maxResults)
 
