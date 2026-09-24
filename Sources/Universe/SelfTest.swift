@@ -336,6 +336,25 @@ enum SelfTest {
         }
         let wirePeak = (0..<Int(wire.frameLength)).map { abs(Int(wire.int16ChannelData![0][$0])) }.max() ?? 0
         check(wire.frameLength > 0 && wirePeak > 1_000, "live voice: multi-channel mic keeps the voice (not silence)")
+
+        // The mic opens before the connection is ready; nothing said meanwhile
+        // may be lost or reordered.
+        let relay = MicChunkRelay()
+        var sent: [String] = []
+        relay.append("a"); relay.append("b")
+        check(sent.isEmpty, "live voice: early mic audio waits for the connection")
+        relay.attach { sent.append($0) }
+        relay.append("c")
+        check(sent == ["a", "b", "c"], "live voice: early mic audio is sent first, in order")
+        relay.detach()
+        relay.append("d")
+        check(sent == ["a", "b", "c"], "live voice: nothing is sent after the call ends")
+        let flood = MicChunkRelay()
+        for i in 0..<(MicChunkRelay.maxPending + 5) { flood.append(String(i)) }
+        var flushed: [String] = []
+        flood.attach { flushed.append($0) }
+        check(flushed.count == MicChunkRelay.maxPending && flushed.first == "5",
+              "live voice: a stalled connection keeps only the newest audio")
         let noise = (audio?["input"] as? [String: Any])?["noise_reduction"] as? [String: Any]
         check(noise?["type"] as? String == "far_field", "live voice tunes noise reduction for a laptop mic")
         check(JSONSerialization.isValidJSONObject(["session": config]), "live session config is valid JSON")
@@ -1263,6 +1282,18 @@ enum SelfTest {
             reloaded.deleteEntry(dayKey: day.date, entryID: entry.id)
         }
         check(reloaded.day(for: yesterday) == nil, "diary: emptied day is removed")
+
+        // Save while dictating tidies, then saves: what ends up stored.
+        struct TidyFailed: Error {}
+        check(DiaryListView.textToSave(original: "raw words", current: "raw words",
+                                       tidied: .success("Raw words.")) == "Raw words.",
+              "diary: save while dictating stores the tidied entry")
+        check(DiaryListView.textToSave(original: "raw words", current: "raw words",
+                                       tidied: .failure(TidyFailed())) == "raw words",
+              "diary: if tidying fails, the words are saved as spoken")
+        check(DiaryListView.textToSave(original: "raw words", current: "raw words, edited",
+                                       tidied: .success("Raw words.")) == nil,
+              "diary: an edit made while tidying is kept, not overwritten or saved")
 
         // The whole point: the diary never reaches a model on its own. Pressing
         // Format sends one entry deliberately; nothing else does.

@@ -50,6 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(LiveDictation.runCheck(audioPath: CommandLine.arguments[i + 1],
                                         outputPath: CommandLine.arguments[i + 2]) ? 0 : 1)
         }
+        if CommandLine.arguments.contains("--mic-latency-check") {
+            Task { @MainActor in exit(await MicLatencyCheck.run() ? 0 : 1) }
+            return
+        }
         guard claimSingleInstance() else { return }
 
         migrateLegacyDataDirectory()
@@ -64,6 +68,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeyManager.shared.register()
         ScheduleStore.shared.start()
         ClipboardMonitor.shared.start()
+        // Switch echo cancellation on now, in the background, so the first
+        // ⌥Space or diary dictation opens the mic in ~0.1 s instead of ~1.2 s.
+        // Does not open the microphone.
+        VoiceService.shared.prepareVoiceProcessing()
 
         /* Draw a virtual notch so screen recordings (which don't capture the
            hardware notch) still show the silhouette behind notch toasts. */

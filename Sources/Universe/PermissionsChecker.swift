@@ -232,8 +232,12 @@ final class PermissionsChecker: ObservableObject {
     func grant(_ kind: Kind) {
         switch kind {
         case .microphone:
-            AVCaptureDevice.requestAccess(for: .audio) { _ in
-                Task { @MainActor in await self.refresh() }
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                Task { @MainActor in
+                    // Get echo cancellation ready so the first use is fast.
+                    if granted { VoiceService.shared.prepareVoiceProcessing() }
+                    await self.refresh()
+                }
             }
         case .speech:
             SFSpeechRecognizer.requestAuthorization { _ in

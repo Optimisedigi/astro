@@ -24,7 +24,12 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
     private let model: String
     private let voice: String
     private let urlSession: URLSession
-    private let audio = RealtimeAudioIO()
+    /// Shared and kept ready between calls, so the mic opens in about 0.1 s.
+    private let audio = RealtimeAudioIO.shared
+    /// Mic audio recorded while the connection is still being set up.
+    private let micRelay = MicChunkRelay()
+    /// Finishes when the microphone is live; started before the network work.
+    private var audioReady: Task<Void, Error>?
     /// Words for the "Ask anything" box while the user is still talking.
     private let dictation = LiveDictation()
     private let registry = ToolRegistry.callRegistry()
@@ -78,6 +83,15 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
         PanelController.shared.chatState.suspendVoiceMode()
         suspendedChatVoiceMode = true
 
+        // The mic starts now, alongside the sign-in and connection rather than
+        // after them; what the user says meanwhile waits in `micRelay`.
+        let ready = startAudio()
+        audioReady = ready
+        // A mic that cannot start ends the call now, not after the network.
+        Task { [weak self] in
+            do { try await ready.value } catch { self?.fail(error) }
+        }
+
         connectTask = Task { [weak self] in
             await self?.connect()
         }
@@ -89,6 +103,8 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
         logger.info("━━━ REALTIME CALL END ━━━")
         connectTask?.cancel()
         connectTask = nil
+        audioReady = nil
+        micRelay.detach()
         audio.onMicrophoneChunk = nil
         audio.onMicrophoneBuffer = nil
         audio.onMicrophoneLevel = nil
@@ -126,8 +142,15 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
             socket = task
             task.resume()
             receive(on: task)
+            // Sends the audio held so far, in order, then streams live.
+            micRelay.attach { [weak task] base64 in
+                guard let task else { return }
+                let event = #"{"type":"input_audio_buffer.append","audio":""# + base64 + #""}"#
+                task.send(.string(event)) { _ in }
+            }
 
-            try startAudio(sendingTo: task)
+            try await audioReady?.value
+            guard isActive else { return }
             if greets {
                 // The model speaks first so the call opens like a real phone call.
                 turns.responseRequested()
@@ -174,12 +197,8 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
         return secret
     }
 
-    private func startAudio(sendingTo task: URLSessionWebSocketTask) throws {
-        audio.onMicrophoneChunk = { [weak task] base64 in
-            guard let task else { return }
-            let event = #"{"type":"input_audio_buffer.append","audio":""# + base64 + #""}"#
-            task.send(.string(event)) { _ in }
-        }
+    private func startAudio() -> Task<Void, Error> {
+        audio.onMicrophoneChunk = { [micRelay] base64 in micRelay.append(base64) }
         audio.onMicrophoneBuffer = { [dictation] buffer in dictation.append(pcm16: buffer) }
         dictation.onText = { [weak self] itemId, text in
             guard let self, isActive else { return }
@@ -205,7 +224,7 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
                 NotchCallTimer.setMode(.listening)
             }
         }
-        try audio.start()
+        return audio.start()
     }
 
     // MARK: - Socket

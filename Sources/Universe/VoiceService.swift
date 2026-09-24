@@ -104,6 +104,22 @@ final class VoiceService: ObservableObject {
     private var lastTranscriptUpdate: Date?
     private var silenceTimer: Timer?
     private var prewarmedVoiceProcessing: Bool = false
+    /// Whether `audioEngine` has Voice Processing on.
+    private var audioEngineHasVoiceProcessing = false
+    /// The mic and speakers `audioEngine` was built on. Kept with the engine
+    /// when it is stored for reuse, so a device switch mid-capture is caught.
+    private var audioEngineDevices: DefaultAudioDevices?
+
+    /// A stopped engine with Voice Processing already on, kept for the next
+    /// capture. Switching Voice Processing on takes over a second; starting a
+    /// kept engine takes about 0.1 s. Stopped, it does not use the microphone,
+    /// so the mic indicator stays off (checked on a MacBook Pro).
+    private var readyEngine: ReadyEngine?
+
+    private struct ReadyEngine: @unchecked Sendable {
+        let engine: AVAudioEngine
+        let devices: DefaultAudioDevices
+    }
 
     /// True when speech recognition and the microphone are both already granted,
     /// so listening can resume silently on launch without raising a prompt.
@@ -112,12 +128,83 @@ final class VoiceService: ObservableObject {
             && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
+    /// Builds the Voice Processing engine in the background so the first
+    /// dictation starts fast, and the live-call engine too when live voice is
+    /// on. Never opens the microphone. Called at launch, once microphone access
+    /// is granted, and when live voice is switched on.
+    func prepareVoiceProcessing() {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
+        let liveVoice = RealtimeVoiceSettings.shared
+        if liveVoice.engine == .openAIRealtime, liveVoice.model != GPTLiveProtocol.model {
+            RealtimeAudioIO.shared.prepare()
+        }
+        guard readyEngine == nil else { return }
+        // A plain background queue, not a Task: this class is main-actor bound,
+        // so a Task would run the >1 s synchronous build on the main thread.
+        DispatchQueue.global(qos: .utility).async {
+            let ready = Self.makeVoiceProcessingEngine()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let service = VoiceService.shared
+                    // Something else may have built one meanwhile; keep only one.
+                    if service.readyEngine == nil {
+                        service.readyEngine = ready
+                    } else {
+                        try? ready.engine.inputNode.setVoiceProcessingEnabled(false)
+                    }
+                }
+            }
+        }
+    }
+
+    /// A new engine with Voice Processing on: the slow step (over a second).
+    /// Safe off the main thread; the engine is not shared until it returns.
+    private nonisolated static func makeVoiceProcessingEngine() -> ReadyEngine {
+        let started = CFAbsoluteTimeGetCurrent()
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        do {
+            try inputNode.setVoiceProcessingEnabled(true)
+            // The VP unit assumes it is running a voice chat and ducks
+            // "other audio" so a remote caller stays audible. Kokoro plays
+            // through a separate engine, so VP counts our own assistant as
+            // other audio and fades her out while the microphone is open.
+            // Duck as little as possible, and never on voice activity.
+            if #available(macOS 14.0, *) {
+                inputNode.voiceProcessingOtherAudioDuckingConfiguration =
+                    AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                        enableAdvancedDucking: false,
+                        duckingLevel: .min
+                    )
+            }
+        } catch {
+            logger.error("Failed to enable voice processing: \(error.localizedDescription)")
+        }
+        let ms = Int((CFAbsoluteTimeGetCurrent() - started) * 1000)
+        logger.info("Voice processing engine ready in \(ms) ms")
+        return ReadyEngine(engine: engine, devices: DefaultAudioDevices.current())
+    }
+
+    /// The kept engine, if it still matches the current mic and speakers.
+    private func takeReadyEngine() -> ReadyEngine? {
+        guard let ready = readyEngine else { return nil }
+        readyEngine = nil
+        guard ready.devices == DefaultAudioDevices.current() else {
+            logger.info("Audio devices changed — rebuilding the voice processing engine")
+            try? ready.engine.inputNode.setVoiceProcessingEnabled(false)
+            return nil
+        }
+        return ready
+    }
+
     func requestPermissions() async -> Bool {
         let speech = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0 == .authorized) }
         }
         guard speech else { return false }
-        return await AVCaptureDevice.requestAccess(for: .audio)
+        let granted = await AVCaptureDevice.requestAccess(for: .audio)
+        if granted { prepareVoiceProcessing() }
+        return granted
     }
 
     /// Chat-panel listen: AEC on, no system mute (TTS may still be wrapping up),
@@ -343,39 +430,35 @@ final class VoiceService: ObservableObject {
     }
 
     private func setupCaptureEngine(voiceProcessing: Bool) -> Bool {
-        let engine = AVAudioEngine()
+        let built: ReadyEngine
+        var reused = false
+        if voiceProcessing, let ready = takeReadyEngine() {
+            built = ready
+            reused = true
+            logger.info("Reusing the ready voice processing engine")
+        } else if voiceProcessing {
+            built = Self.makeVoiceProcessingEngine()
+        } else {
+            built = ReadyEngine(engine: AVAudioEngine(), devices: DefaultAudioDevices.current())
+        }
+        let engine = built.engine
         audioEngine = engine
+        audioEngineHasVoiceProcessing = voiceProcessing
+        audioEngineDevices = built.devices
 
         let inputNode = engine.inputNode
-
-        if voiceProcessing {
-            do {
-                try inputNode.setVoiceProcessingEnabled(true)
-                logger.info("Voice processing (AEC) enabled on input node")
-
-                // The VP unit assumes it is running a voice chat and ducks
-                // "other audio" so a remote caller stays audible. Kokoro plays
-                // through a separate engine, so VP counts our own assistant as
-                // other audio and fades her out while the microphone is open.
-                // Duck as little as possible, and never on voice activity.
-                if #available(macOS 14.0, *) {
-                    inputNode.voiceProcessingOtherAudioDuckingConfiguration =
-                        AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
-                            enableAdvancedDucking: false,
-                            duckingLevel: .min
-                        )
-                }
-            } catch {
-                logger.error("Failed to enable voice processing: \(error.localizedDescription)")
-            }
-        }
-
         let hwFormat = inputNode.outputFormat(forBus: 0)
         logger.info("Input node format: \(hwFormat.sampleRate)Hz, \(hwFormat.channelCount)ch")
 
         guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+            discardCaptureEngine()
+            // A kept engine can go stale in ways the device check misses; one
+            // fresh build is still faster than failing the capture.
+            if reused {
+                logger.warning("Ready engine reports no audio format, rebuilding")
+                return setupCaptureEngine(voiceProcessing: voiceProcessing)
+            }
             logger.error("Invalid audio format")
-            audioEngine = nil
             return false
         }
 
@@ -416,12 +499,31 @@ final class VoiceService: ObservableObject {
         do {
             try engine.start()
         } catch {
+            discardCaptureEngine()
+            // A kept engine can go stale in ways the device check misses; one
+            // fresh build is still faster than failing the capture.
+            if reused {
+                logger.warning("Ready engine failed to start, rebuilding: \(error.localizedDescription)")
+                return setupCaptureEngine(voiceProcessing: voiceProcessing)
+            }
             logger.error("Failed to start audio engine: \(error.localizedDescription)")
             onError?(VoiceError.noMic.localizedDescription)
-            audioEngine = nil
             return false
         }
         return true
+    }
+
+    /// Drops a capture engine that failed to start. Voice Processing is turned
+    /// off first: a dropped VPIO engine can otherwise leave the mic open.
+    private func discardCaptureEngine() {
+        if let engine = audioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            try? engine.inputNode.setVoiceProcessingEnabled(false)
+        }
+        audioEngine = nil
+        audioEngineHasVoiceProcessing = false
+        audioEngineDevices = nil
     }
 
     private func finalize() {
@@ -487,12 +589,21 @@ final class VoiceService: ObservableObject {
         if let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
-            // Turn Voice Processing off explicitly. The VPIO unit keeps the
-            // input device open, so dropping the engine alone can leave the
-            // microphone — and its indicator — live.
-            try? engine.inputNode.setVoiceProcessingEnabled(false)
+            // A stopped engine no longer uses the microphone, even with Voice
+            // Processing on, so a Voice Processing engine is kept for the next
+            // capture. Any other engine turns Voice Processing off explicitly:
+            // dropping a VPIO engine without that can leave the mic live.
+            // Stored under the devices it was built on, not today's, so a
+            // device switch during the capture triggers a rebuild next time.
+            if audioEngineHasVoiceProcessing, readyEngine == nil, let devices = audioEngineDevices {
+                readyEngine = ReadyEngine(engine: engine, devices: devices)
+            } else {
+                try? engine.inputNode.setVoiceProcessingEnabled(false)
+            }
         }
         audioEngine = nil
+        audioEngineHasVoiceProcessing = false
+        audioEngineDevices = nil
         prewarmedVoiceProcessing = false
 
         speechRecognizer = nil

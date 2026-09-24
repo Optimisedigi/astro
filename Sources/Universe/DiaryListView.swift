@@ -115,7 +115,8 @@ struct DiaryListView: View {
                         .buttonStyle(.plain)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(hasDraft ? .secondary : .tertiary)
-                        .disabled(!hasDraft)
+                        .disabled(!hasDraft || isFormatting)
+                        .help(isDictating ? "Stop, tidy the entry and save it" : "Save this entry")
                 }
                 .frame(width: 52)
             }
@@ -184,12 +185,55 @@ struct DiaryListView: View {
     // MARK: - Actions
 
     private func commitDraft() {
-        // Stop first: finishing the capture delivers the last words into the
-        // draft, so saving mid-sentence keeps them instead of dropping them — and
-        // clearing the draft afterwards is not undone by a late transcript.
-        stopDictation()
+        // Matches the disabled Save button: Return must not save mid-tidy.
+        guard !isFormatting else { return }
+        // Saving mid-dictation is "I'm done": tidy the entry, then save it, in
+        // one press. Otherwise the rough transcript would be stored as heard.
+        if isDictating {
+            tidyThenSave()
+            return
+        }
         guard store.addEntry(draft) else { return }
         draft = ""
+    }
+
+    /// Stops dictating, tidies the entry and saves the result. If tidying
+    /// fails, the words are saved as spoken so nothing is lost; Format on the
+    /// saved entry can tidy it later.
+    private func tidyThenSave() {
+        // Stop first: finishing the capture delivers the last words into the
+        // draft, so saving mid-sentence keeps them instead of dropping them.
+        stopDictation()
+        let original = draft
+        guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        errorMessage = nil
+        isFormatting = true
+        Task {
+            let tidied: Result<String, Error>
+            do {
+                tidied = .success(try await DiaryFormatter.format(original))
+            } catch {
+                tidied = .failure(error)
+            }
+            isFormatting = false
+            guard let text = Self.textToSave(original: original, current: draft, tidied: tidied),
+                  store.addEntry(text) else { return }
+            draft = ""
+            if case let .failure(error) = tidied {
+                errorMessage = "Saved as spoken. Could not tidy: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// What Save-while-dictating stores once tidying finishes: the tidied text,
+    /// or the words as spoken if tidying failed. Nothing if the user edited
+    /// the draft meanwhile: their edit stands and they save it themselves.
+    static func textToSave(original: String, current: String, tidied: Result<String, Error>) -> String? {
+        guard current == original else { return nil }
+        switch tidied {
+        case let .success(text): return text
+        case .failure: return original
+        }
     }
 
     /// Stopping means the user has finished talking, so the entry is tidied

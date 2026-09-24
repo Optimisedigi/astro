@@ -132,7 +132,11 @@ struct VoiceSettingsBody: View {
                 Spacer()
                 Toggle("OpenAI live voice for calls", isOn: Binding(
                     get: { isOn },
-                    set: { realtime.engine = $0 ? .openAIRealtime : .builtIn }
+                    set: {
+                        realtime.engine = $0 ? .openAIRealtime : .builtIn
+                        // Get the live-call audio ready now, so the first call is fast.
+                        VoiceService.shared.prepareVoiceProcessing()
+                    }
                 ))
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -150,6 +154,7 @@ struct VoiceSettingsBody: View {
                         Text("\(option.name) — \(option.detail)").tag(option.id)
                     }
                 }
+                .onChange(of: realtime.model) { VoiceService.shared.prepareVoiceProcessing() }
                 Picker("Voice", selection: $realtime.voice) {
                     ForEach(RealtimeVoiceSettings.voices(for: realtime.model)) { option in
                         Text(option.detail.isEmpty ? option.name : "\(option.name) — \(option.detail)").tag(option.id)
