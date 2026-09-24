@@ -58,6 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeyManager.shared.onHotKey = {
             PanelController.shared.toggle()
         }
+        HotKeyManager.shared.onTypingHotKey = {
+            PanelController.shared.toggleForTyping()
+        }
         HotKeyManager.shared.register()
         ScheduleStore.shared.start()
         ClipboardMonitor.shared.start()

@@ -1,11 +1,11 @@
 import Foundation
 
-/// Tidies a dictated diary entry into readable prose, on explicit request.
+/// Tidies a dictated diary entry into readable prose.
 ///
-/// This is the one place diary text is sent to a model, and only when the user
-/// presses Format. Nothing here is automatic and nothing is stored remotely:
-/// the raw entry goes out, the cleaned version comes back, and the user decides
-/// whether to keep it.
+/// This is the one place diary text is sent to a model: when the user stops
+/// dictating or presses Format. Nothing is stored remotely: the raw entry goes
+/// out and the cleaned version comes back. A tidied draft stays unsaved until
+/// the user presses Save; a saved entry is updated in place and can be edited.
 enum DiaryFormatter {
     /// Deliberately narrow: dictation produces run-on text with no punctuation,
     /// and the job is to make that readable — not to interpret, summarise, or
@@ -15,7 +15,7 @@ enum DiaryFormatter {
 
     Rules:
     - Keep the author's own words, voice and meaning. Do not invent details.
-    - Fix punctuation, capitalisation and obvious dictation slips.
+    - Fix spelling, punctuation, capitalisation and obvious dictation slips.
     - Break it into paragraphs where the subject changes.
     - Do not add a title, date, heading, preamble or commentary.
     - Return only the reformatted entry.

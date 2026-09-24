@@ -66,7 +66,10 @@ actor ClaudeService {
     /// request so a fact saved mid-conversation applies on the very next turn.
     private static func systemPromptWithMemory() async -> String {
         let memory = await MainActor.run { MemoryStore.shared.promptContext() }
-        return memory.isEmpty ? systemPrompt : systemPrompt + "\n\n" + memory
+        let base = memory.isEmpty ? systemPrompt : systemPrompt + "\n\n" + memory
+        // Last, so the unchanging part above stays a stable prefix; rebuilt
+        // per request, so the time is fresh on every turn.
+        return base + "\n\n" + ScheduleParser.currentTimeNote()
     }
 
     /// Streams events for one turn. Messages and tools are Anthropic API format.

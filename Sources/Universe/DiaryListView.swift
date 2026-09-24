@@ -2,8 +2,9 @@ import SwiftUI
 
 /// The Diary tab: dated pages of entries, newest day first.
 ///
-/// Entirely local. Writing here never calls the agent and nothing in the diary
-/// is put into a prompt, so entries are not sent to a model.
+/// Stored only on this Mac. Writing here never calls the agent and nothing in
+/// the diary is put into a chat prompt. The one exception is tidying: an entry
+/// is sent to the model when dictation stops or Format is pressed.
 struct DiaryListView: View {
     @ObservedObject var store: DiaryStore
 
@@ -11,8 +12,15 @@ struct DiaryListView: View {
     /// so pressing it once is enough to start talking.
     var autoStartDictation: Binding<Bool>?
 
-    /// Voice capture writes here live, exactly like the chat input.
-    @State private var draft = ""
+    init(store: DiaryStore, draft: Binding<String>, autoStartDictation: Binding<Bool>? = nil) {
+        self.store = store
+        _draft = draft
+        self.autoStartDictation = autoStartDictation
+    }
+
+    /// Voice capture writes here live, exactly like the chat input. Owned by
+    /// the chat state, so an unsaved entry survives switching tabs.
+    @Binding var draft: String
     @State private var isDictating = false
     @State private var editingEntry: UUID?
     @State private var editDraft = ""
@@ -90,7 +98,7 @@ struct DiaryListView: View {
                             .foregroundStyle(isDictating ? Color.red : .secondary)
                     }
                     .buttonStyle(.plain)
-                    .help(isDictating ? "Stop dictating" : "Dictate an entry")
+                    .help(isDictating ? "Stop dictating and tidy the entry" : "Dictate an entry")
 
                     if isFormatting {
                         ProgressView().controlSize(.small)
@@ -163,7 +171,7 @@ struct DiaryListView: View {
                 .foregroundStyle(.tertiary)
             Text("No diary entries yet")
                 .font(.headline)
-            Text("Write or dictate an entry. Entries are stored only on this Mac — nothing is sent to a model unless you press Format.")
+            Text("Write or dictate an entry. Entries are stored only on this Mac. When you stop dictating, or press Format, the entry is sent to the AI model to fix spelling and punctuation in your own words.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -184,8 +192,10 @@ struct DiaryListView: View {
         draft = ""
     }
 
+    /// Stopping means the user has finished talking, so the entry is tidied
+    /// straight away and shown for them to check before they save it.
     private func toggleDictation() {
-        isDictating ? stopDictation() : startDictation()
+        isDictating ? formatDraft() : startDictation()
     }
 
     /// Tidies an entry that is already saved, writing the result back in place.
@@ -205,7 +215,8 @@ struct DiaryListView: View {
     }
 
     /// Sends the draft to the model to be tidied up. The only path by which
-    /// diary text leaves this Mac, and it never runs on its own.
+    /// diary text leaves this Mac: it runs when the user stops dictating or
+    /// presses Format, never on a saved entry by itself.
     private func formatDraft() {
         // Stop dictating first, exactly as saving does. Formatting is something
         // you reach for when you have finished talking, and leaving the mic open

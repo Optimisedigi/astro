@@ -1012,6 +1012,43 @@ enum SelfTest {
               "panel: opening bumps composer focus so paste lands in the field")
         focusState.panelDidClose()
 
+        // ⇧⌥Space and the notch keyboard open for typing: the mic stays off and
+        // no live conversation starts, whatever the Microphone setting says.
+        let typingState = ChatState()
+        let savedVoiceMode = typingState.voiceMode
+        typingState.voiceMode = true
+        typingState.openForTypingOnly = true
+        let beforeTyping = typingState.composerFocusToken
+        typingState.panelDidOpen()
+        check(!typingState.voice.isListening && !NotchCallButton.isInCall,
+              "typing: opening for typing leaves the mic off and starts no call")
+        check(typingState.composerFocusToken != beforeTyping, "typing: opening for typing focuses the text field")
+        check(!typingState.openForTypingOnly, "typing: the typing request is used once, not kept")
+        check(typingState.voiceMode, "typing: the Microphone setting itself is unchanged")
+        check(typingState.isTypingOnly, "typing: the panel stays in typing mode after opening")
+        // Leaving the diary hands the mic back, which must not reopen it here.
+        typingState.resumeVoiceModeIfSuspended()
+        check(!typingState.voice.isListening, "typing: leaving the diary does not turn the mic back on")
+        typingState.panelDidClose()
+        check(!typingState.isTypingOnly, "typing: closing the panel ends typing mode")
+        typingState.voiceMode = savedVoiceMode
+
+        // ⇧⌥Space and ⌥Space each reach their own action.
+        let hotKeys = HotKeyManager()
+        var pressed: [String] = []
+        hotKeys.onHotKey = { pressed.append("talk") }
+        hotKeys.onTypingHotKey = { pressed.append("type") }
+        hotKeys.handle(hotKeyID: HotKeyManager.talkHotKeyID)
+        hotKeys.handle(hotKeyID: HotKeyManager.typingHotKeyID)
+        check(pressed == ["talk", "type"], "hotkeys: ⌥Space talks, ⇧⌥Space types")
+
+        // The notch wing: pencil, phone, keyboard from left to right.
+        check(NotchCallButton.wingAction(atX: 20) == .diary, "notch: the left icon opens the diary")
+        check(NotchCallButton.wingAction(atX: 60) == .call, "notch: the middle icon is the call button")
+        check(NotchCallButton.wingAction(atX: 90) == .typing, "notch: the right icon opens typing")
+        check(NotchCallButton.wingAction(atX: 130) == .typing,
+              "notch: the area under the notch belongs to the keyboard")
+
         let restoreSpeech = kokoro.speechEnabled
         kokoro.speechEnabled = false
         check(UserDefaults.standard.object(forKey: "kokoroSpeechEnabled") as? Bool == false,
@@ -1318,6 +1355,53 @@ enum SelfTest {
         check(ScheduleParser.parse("0 9 * * *")?.scheduleType == "cron", "parse cron '0 9 * * *'")
         check(ScheduleParser.parse("garbage") == nil, "reject unparseable schedule")
 
+        // Everyday phrasings, all measured from this Mac's clock.
+        func onceDate(_ text: String) -> Date? {
+            guard case let .once(date)? = ScheduleParser.parse(text)?.kind else { return nil }
+            return date
+        }
+        func minutesFromNow(_ text: String) -> Double? {
+            onceDate(text).map { $0.timeIntervalSinceNow / 60 }
+        }
+        for (phrase, minutes) in [("45 minutes", 45.0), ("in 45 mins", 45), ("in 2 hours", 120),
+                                  ("in an hour", 60), ("a minute", 1), ("in 3 days", 4320)] {
+            let got = minutesFromNow(phrase)
+            check(got.map { abs($0 - minutes) < 0.1 } == true, "parse '\(phrase)' as \(Int(minutes)) minutes from now")
+        }
+        let calendar = Calendar.current
+        for (phrase, hour, minute) in [("9:15pm", 21, 15), ("at 4pm", 16, 0), ("9:15 p.m.", 21, 15),
+                                       ("21:15", 21, 15), ("12am", 0, 0), ("tomorrow at 3pm", 15, 0)] {
+            let date = onceDate(phrase)
+            let parts = date.map { calendar.dateComponents([.hour, .minute], from: $0) }
+            let future = date.map { $0 > Date() && $0.timeIntervalSinceNow <= 2 * 86400 } == true
+            check(parts?.hour == hour && parts?.minute == minute && future,
+                  "parse '\(phrase)' as the next \(hour):\(minute)")
+        }
+        for phrase in ["45", "13pm", "25:00", "9:75pm"] {
+            check(ScheduleParser.parse(phrase) == nil, "reject '\(phrase)' as a time")
+        }
+        // A time with no am/pm (speech often drops it) means the sooner reading,
+        // on a fixed clock so the result does not depend on when the test runs.
+        let eightPM = calendar.date(bySettingHour: 20, minute: 0, second: 0, of: Date())!
+        let eightAM = calendar.date(bySettingHour: 8, minute: 0, second: 0, of: Date())!
+        for (hour, ampm, now, wantHour, sameDay, label) in [
+            (9, "", eightPM, 21, true, "'9:15' at 8pm is 9:15pm tonight"),
+            (9, "", eightAM, 9, true, "'9:15' at 8am is 9:15am today"),
+            (7, "", eightPM, 7, false, "'7:15' at 8pm is 7:15am tomorrow"),
+            (21, "", eightAM, 21, true, "'21:15' stays a 24-hour time"),
+            (9, "am", eightPM, 9, false, "'9:15am' at 8pm is tomorrow morning"),
+        ] {
+            let date = ScheduleParser.nextClockTime(hour: hour, minute: 15, ampm: ampm, after: now)
+            let parts = date.map { calendar.dateComponents([.hour, .minute], from: $0) }
+            let wantDay = sameDay ? now : calendar.date(byAdding: .day, value: 1, to: now)!
+            let day = date.map { calendar.isDate($0, inSameDayAs: wantDay) }
+            check(parts?.hour == wantHour && parts?.minute == 15 && day == true, label)
+        }
+        let note = ScheduleParser.currentTimeNote(
+            now: Date(timeIntervalSince1970: 1_790_000_000), timeZone: TimeZone(identifier: "Europe/London")!)
+        check(note.contains("2026") && note.contains("Europe/London") && note.contains("never ask"),
+              "prompt time note names the date, time zone and the no-asking rule")
+
         // Cron next-run: '0 9 * * *' lands at 09:00
         if let next = CronSchedule.next(after: Date(), expression: "0 9 * * *") {
             let c = Calendar.current.dateComponents([.hour, .minute], from: next)
@@ -1333,6 +1417,7 @@ enum SelfTest {
         ], workingDirectory: wd)
         check(created?.contains(#""success": true"#) == true && created?.contains(#""type": "reminder"#) == true,
               "create_reminder JSON format")
+        check(created?.contains(#""now": ""#) == true, "create_reminder reports the Mac's current time")
         let bad = try? await CreateReminderTool().run(input: [
             "name": "x", "message": "y", "schedule": "whenever",
         ], workingDirectory: wd)

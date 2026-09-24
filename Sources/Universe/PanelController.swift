@@ -59,9 +59,41 @@ final class PanelController {
     /// pencil button. Deliberately never touches the agent: the transcript goes
     /// straight into the diary draft.
     func openDiaryDictation() {
-        show()
+        // The diary needs the microphone to itself. A live call running at the
+        // same time hears the entry too and answers it as a request (it once
+        // offered to put a dictated entry in the calendar), so end it first.
+        if NotchCallButton.isInCall { NotchCallButton.endCall() }
+        // Flag the dictation before showing: opening the panel checks it so it
+        // does not start a live conversation on top of the diary.
         chatState.requestedTab = ChatView.diaryTabIndex
         chatState.startDiaryDictation = true
+        show()
+    }
+
+    /// Open the panel on Chats ready to type, with the microphone off and any
+    /// live call ended: for the notch keyboard and ⇧⌥Space. If the panel is
+    /// already up, it switches from talking to typing instead. The Microphone
+    /// setting is not changed, so ⌥Space still opens talking next time.
+    func openForTyping() {
+        chatState.requestedTab = ChatView.chatsTabIndex
+        if panel.isVisible {
+            chatState.switchToTyping()
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+            return
+        }
+        chatState.openForTypingOnly = true
+        show()
+    }
+
+    /// ⇧⌥Space: open for typing (or switch an open panel to typing, like the
+    /// notch keyboard); pressed again while typing, it closes the panel.
+    func toggleForTyping() {
+        if panel.isVisible, chatState.isTypingOnly {
+            hide()
+        } else {
+            openForTyping()
+        }
     }
 
     /// Open the panel with images dropped on the notch wing already staged, so

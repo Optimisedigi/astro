@@ -23,6 +23,7 @@ enum NotchCallButton {
     private(set) static var isInCall = false
     private static var labelField: NSTextField?
     private static var pencilField: NSTextField?
+    private static var keyboardField: NSTextField?
 
     /// The live voice call, or nil when idle. Held for the duration of the call
     /// so `endCall()` can shut the same session down.
@@ -33,13 +34,28 @@ enum NotchCallButton {
 
     // MARK: - Constants
 
-    /// Width of the wing extension. Sized to fit both icons plus corner curvature
-    /// with comfortable padding on the left where the bottom-corner flare lives.
-    private static let wingWidth: CGFloat = 92
+    /// Width of the wing extension. Sized to fit three icons plus corner
+    /// curvature with comfortable padding on the left where the bottom-corner
+    /// flare lives.
+    private static let wingWidth: CGFloat = 122
 
-    /// Width of each icon's slot. The pencil sits in the left slot, the phone in
-    /// the right; the click zones divide on the boundary between them.
+    /// Width of each icon's slot. Left to right: pencil, phone, keyboard; the
+    /// click zones divide on the boundaries between them.
     private static let iconSlotWidth: CGFloat = 30
+
+    /// Where the first icon slot starts, clear of the bottom-left flare.
+    private static let iconLeftPadding: CGFloat = bottomCornerRadius + 6
+
+    /// What a click at `x` within the wing does.
+    enum WingAction: Equatable { case diary, call, typing }
+
+    /// The pencil and phone own their slots; everything from the keyboard's slot
+    /// rightward, including the area tucked under the notch, opens typing.
+    static func wingAction(atX x: CGFloat) -> WingAction {
+        if x < iconLeftPadding + iconSlotWidth { return .diary }
+        if x < iconLeftPadding + iconSlotWidth * 2 { return .call }
+        return .typing
+    }
 
     /// The panel is wider than the visible wing: the extra runs to the right,
     /// tucking under the notch's bottom flare. Because `windowWidth` and
@@ -166,14 +182,13 @@ enum NotchCallButton {
         hover.frame = rootView.bounds
         rootView.layer?.addSublayer(hover)
 
-        // Two icons in the wing's body: pencil (diary) then phone (call). The
-        // bottom-left flare (bottomCornerRadius) visually pulls weight to the
-        // left, so both are offset rightward to balance.
+        // Three icons in the wing's body: pencil (diary), phone (call), then
+        // keyboard (type a question). The bottom-left flare (bottomCornerRadius)
+        // visually pulls weight to the left, so all are offset rightward.
         let labelHeight: CGFloat = 18
         let labelY = (wingHeight - labelHeight) / 2
-        let iconLeftPadding: CGFloat = bottomCornerRadius + 6
 
-        let pencil = makePencilLabel()
+        let pencil = makeSymbolLabel("pencil", description: "Write a diary entry")
         pencil.frame = NSRect(
             x: iconLeftPadding,
             y: labelY,
@@ -195,6 +210,17 @@ enum NotchCallButton {
         label.alphaValue = 0
         rootView.addSubview(label)
         labelField = label
+
+        let keyboard = makeSymbolLabel("keyboard", description: "Type a question")
+        keyboard.frame = NSRect(
+            x: iconLeftPadding + iconSlotWidth * 2,
+            y: labelY,
+            width: iconSlotWidth,
+            height: labelHeight
+        )
+        keyboard.alphaValue = 0
+        rootView.addSubview(keyboard)
+        keyboardField = keyboard
 
         // Click overlay.
         let overlay = CallButtonOverlay(frame: rootView.bounds)
@@ -284,6 +310,7 @@ enum NotchCallButton {
             context.duration = 0.1
             labelField?.animator().alphaValue = 0
             pencilField?.animator().alphaValue = 0
+            keyboardField?.animator().alphaValue = 0
         }
 
         // Collapse shape back to notch edge.
@@ -339,6 +366,7 @@ enum NotchCallButton {
         if let label = labelField, let hoverLayer {
             label.alphaValue = 0
             pencilField?.alphaValue = 0
+            keyboardField?.alphaValue = 0
             animateExpand(shapeLayer: shapeLayer, hoverLayer: hoverLayer, label: label, wingHeight: wingHeight)
         }
 
@@ -352,25 +380,26 @@ enum NotchCallButton {
         hoverLayer = nil
         labelField = nil
         pencilField = nil
+        keyboardField = nil
     }
 
     /// Called when the button is tapped. `x` is the click position within the
-    /// wing, which decides whether the pencil or the phone was hit.
+    /// wing, which decides whether the pencil, phone or keyboard was hit.
     fileprivate static func handleTap(atX x: CGFloat) {
         ButtonSound.shared.play()
 
-        // The pencil occupies the left slot; everything to its right is the
-        // phone, so the wide area tucked under the notch still ends a call.
-        let boundary = bottomCornerRadius + 6 + iconSlotWidth
-        if x < boundary {
+        switch wingAction(atX: x) {
+        case .diary:
             openDiary()
-            return
-        }
-
-        if isInCall {
-            endCall()
-        } else {
-            startCall()
+        case .typing:
+            logger.info("Typing requested from the notch")
+            PanelController.shared.openForTyping()
+        case .call:
+            if isInCall {
+                endCall()
+            } else {
+                startCall()
+            }
         }
     }
 
@@ -564,6 +593,7 @@ enum NotchCallButton {
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 label.animator().alphaValue = 1.0
                 pencilField?.animator().alphaValue = 1.0
+                keyboardField?.animator().alphaValue = 1.0
             }
         }
     }
@@ -646,13 +676,14 @@ enum NotchCallButton {
         return label
     }
 
-    /// The diary pencil, drawn to match the phone icon's weight and colour.
-    private static func makePencilLabel() -> NSTextField {
+    /// A wing icon (the diary pencil, the keyboard), drawn to match the phone
+    /// icon's weight and colour.
+    private static func makeSymbolLabel(_ symbolName: String, description: String) -> NSTextField {
         let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
         let attachment = NSTextAttachment()
         if let image = NSImage(
-            systemSymbolName: "pencil",
-            accessibilityDescription: "Write a diary entry"
+            systemSymbolName: symbolName,
+            accessibilityDescription: description
         )?.withSymbolConfiguration(config) {
             attachment.image = image
         }

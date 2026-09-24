@@ -1,13 +1,29 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Global ⌥Space hotkey via Carbon RegisterEventHotKey (same mechanism Tama uses).
+/// Global hotkeys via Carbon RegisterEventHotKey (same mechanism Tama uses):
+/// ⌥Space opens the panel as usual; ⇧⌥Space opens it for typing, mic off.
 @MainActor
 final class HotKeyManager {
     static let shared = HotKeyManager()
     var onHotKey: (() -> Void)?
+    var onTypingHotKey: (() -> Void)?
 
-    private var hotKeyRef: EventHotKeyRef?
+    /// Carbon IDs for the two shortcuts; the handler tells them apart by these.
+    static let talkHotKeyID: UInt32 = 1
+    static let typingHotKeyID: UInt32 = 2
+
+    private var hotKeyRefs: [EventHotKeyRef] = []
+    private var handlerRef: EventHandlerRef?
+
+    /// Which callback a pressed shortcut runs. Split out so the self-test can
+    /// check the routing without pressing keys.
+    func handle(hotKeyID: UInt32) {
+        switch hotKeyID {
+        case Self.typingHotKeyID: onTypingHotKey?()
+        default: onHotKey?()
+        }
+    }
 
     func register() {
         unregister()
@@ -15,31 +31,43 @@ final class HotKeyManager {
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
         )
-        let handler: EventHandlerUPP = { _, _, userData in
-            guard let userData else { return OSStatus(eventNotHandledErr) }
+        let handler: EventHandlerUPP = { _, event, userData in
+            guard let userData, let event else { return OSStatus(eventNotHandledErr) }
+            var pressed = EventHotKeyID()
+            let status = GetEventParameter(
+                event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                nil, MemoryLayout<EventHotKeyID>.size, nil, &pressed
+            )
+            guard status == noErr else { return status }
             let manager = Unmanaged<HotKeyManager>.fromOpaque(userData).takeUnretainedValue()
             MainActor.assumeIsolated {
-                manager.onHotKey?()
+                manager.handle(hotKeyID: pressed.id)
             }
             return noErr
         }
         InstallEventHandler(
             GetApplicationEventTarget(), handler, 1, &eventType,
-            Unmanaged.passUnretained(self).toOpaque(), nil
+            Unmanaged.passUnretained(self).toOpaque(), &handlerRef
         )
-        let hotKeyID = EventHotKeyID(signature: OSType(0x54434C31), id: 1) // 'TCL1'
-        RegisterEventHotKey(
-            UInt32(kVK_Space),
-            UInt32(optionKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
+        for (id, modifiers) in [(Self.talkHotKeyID, optionKey), (Self.typingHotKeyID, optionKey | shiftKey)] {
+            var ref: EventHotKeyRef?
+            let hotKeyID = EventHotKeyID(signature: OSType(0x54434C31), id: id) // 'TCL1'
+            RegisterEventHotKey(
+                UInt32(kVK_Space),
+                UInt32(modifiers),
+                hotKeyID,
+                GetApplicationEventTarget(),
+                0,
+                &ref
+            )
+            if let ref { hotKeyRefs.append(ref) }
+        }
     }
 
     func unregister() {
-        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
-        hotKeyRef = nil
+        for ref in hotKeyRefs { UnregisterEventHotKey(ref) }
+        hotKeyRefs = []
+        if let handlerRef { RemoveEventHandler(handlerRef) }
+        handlerRef = nil
     }
 }

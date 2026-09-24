@@ -41,28 +41,40 @@ final class ScheduleStore: ObservableObject {
 
     // MARK: - CRUD (JSON responses match Tama's tool output format)
 
+    // Every result carries "now" in local time. A live call's instructions are
+    // set once when it starts, so this is how a long call gets a fresh clock.
     func create(name: String, kind: Job.Kind, schedule: String, message: String) -> String {
+        let now = Self.localTimeFormatter().string(from: Date())
         guard let parsed = ScheduleParser.parse(schedule),
               let nextRun = ScheduleParser.nextRun(parsed) else {
-            return #"{"error": "Could not parse schedule: \#(schedule)"}"#
+            return #"{"error": "Could not parse schedule: \#(schedule)", "now": "\#(now)"}"#
         }
         let job = Job(name: name, kind: kind, scheduleType: parsed.scheduleType,
                       schedule: schedule, message: message, nextRun: nextRun)
         jobs.append(job)
         save()
-        let formatter = ISO8601DateFormatter()
+        let formatter = Self.localTimeFormatter()
         return """
-        {"success": true, "name": "\(name)", "type": "\(kind.rawValue)", "schedule_type": "\(parsed.scheduleType)", "next_run": "\(formatter.string(from: nextRun))"}
+        {"success": true, "name": "\(name)", "type": "\(kind.rawValue)", "schedule_type": "\(parsed.scheduleType)", "next_run": "\(formatter.string(from: nextRun))", "now": "\(now)"}
         """
     }
 
     func list() -> String {
-        guard !jobs.isEmpty else { return #"{"schedules": [], "message": "No active schedules."}"# }
-        let formatter = ISO8601DateFormatter()
+        let formatter = Self.localTimeFormatter()
+        let now = formatter.string(from: Date())
+        guard !jobs.isEmpty else { return #"{"schedules": [], "message": "No active schedules.", "now": "\#(now)"}"# }
         let items = jobs.map {
             #"{"name": "\#($0.name)", "type": "\#($0.kind.rawValue)", "schedule_type": "\#($0.scheduleType)", "next_run": "\#(formatter.string(from: $0.nextRun))"}"#
         }
-        return #"{"schedules": [\#(items.joined(separator: ", "))]}"#
+        return #"{"schedules": [\#(items.joined(separator: ", "))], "now": "\#(now)"}"#
+    }
+
+    /// Times go back to the model in the Mac's own time zone (with its offset),
+    /// so the model confirms "9:15pm" rather than reading out a UTC time.
+    private static func localTimeFormatter() -> ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = .current
+        return formatter
     }
 
     func delete(name: String) -> String {

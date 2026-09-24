@@ -9,13 +9,13 @@ private func param(_ input: [String: Any], _ key: String) throws -> String {
 
 struct CreateReminderTool: AgentTool {
     let name = "create_reminder"
-    let description = #"Create a reminder that will fire a macOS notification at the scheduled time. Supports: "30m", "every 2h", "tomorrow 3pm", "in 10 minutes", cron expressions (e.g. "0 9 * * *")."#
+    let description = #"Create a reminder that will fire a macOS notification at the scheduled time. Supports: "30m", "45 minutes", "in an hour", "9:15pm", "at 4pm", "every 2h", "tomorrow 3pm", "in 10 minutes", cron expressions (e.g. "0 9 * * *"). Times are worked out from this Mac's clock, so pass the user's time as they said it and never ask them what time it is now. For "in 1 hour 30 minutes" pass "90m". The result's next_run and now are in the user's local time; if the schedule can't be parsed, use now to work out a supported form and try again instead of asking."#
     let inputSchema: [String: Any] = [
         "type": "object",
         "properties": [
             "name": ["type": "string", "description": "Short name for the reminder"],
             "message": ["type": "string", "description": "Notification body text"],
-            "schedule": ["type": "string", "description": "When to fire, e.g. \"30m\", \"tomorrow 3pm\", \"0 9 * * *\""],
+            "schedule": ["type": "string", "description": "When to fire, e.g. \"45 minutes\", \"9:15pm\", \"tomorrow 3pm\", \"0 9 * * *\""],
         ],
         "required": ["name", "message", "schedule"],
     ]

@@ -97,6 +97,13 @@ func buildCallSystemPrompt() -> String {
     (create_routine), list/delete schedules, create task checklists (task), capture the screen \
     (screenshot), and end the call (end_call). Working directory: \(cwd)
 
+    ## Time
+    \(ScheduleParser.currentTimeNote())
+    - For a reminder or timer, pass the time the way the user said it ("45 minutes", \
+    "9:15pm") to create_reminder. It uses the Mac's clock, so don't ask what time it is.
+    - The time above was set when the call started. On a long call, the "now" field in \
+    create_reminder and list_schedules results is the up-to-date time.
+
     ## Tool use on a call
     - Only chain multiple tools when the request literally requires it (read-before-edit, \
     multi-file search, etc.). On a call, over-delivery reads as rambling.

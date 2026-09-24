@@ -8,21 +8,65 @@ enum ScheduleParser {
         var scheduleType: String // "once" | "interval" | "cron"
     }
 
+    /// Every time is worked out from this Mac's clock, so "45 minutes" or
+    /// "9:15pm" never needs the model (or the user) to know what time it is.
     private static let patterns: [(pattern: String, handler: (NSTextCheckingResult, String) -> Parsed?)] = [
-        (#"^in\s+(\d+)\s*(hour|hr|minute|min|day|d)s?$"#, { m, s in
+        // "30m", "45 minutes", "in 45 mins", "in 2 hours"
+        (#"^(?:in\s+)?(\d+)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)$"#, { m, s in
             once(offset: unitSeconds(s, m, 1, 2), type: "once")
         }),
-        (#"^(\d+)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)$"#, { m, s in
-            once(offset: unitSeconds(s, m, 1, 2), type: "once")
+        // "in an hour", "a minute"
+        (#"^(?:in\s+)?an?\s+(minute|hour|day)$"#, { m, s in
+            let unit = (s as NSString).substring(with: m.range(at: 1))
+            return once(offset: ["minute": 60, "hour": 3600, "day": 86400][unit], type: "once")
         }),
         (#"^every\s+(\d+)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)$"#, { m, s in
             guard let n = seconds(s, m, 1, 2) else { return nil }
             return Parsed(kind: .interval(n), scheduleType: "interval")
         }),
-        (#"^(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$"#, { m, s in
+        // "tomorrow 3pm", "monday at 9:30am", "today 21:15"
+        (#"^(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$"#, { m, s in
             dayTime(s, m).map { Parsed(kind: .once($0), scheduleType: "once") }
         }),
+        // A clock time with no day: "9:15pm", "at 4pm", "21:15", "9:15". Means
+        // the next time the clock shows it. Needs am/pm or minutes so a bare
+        // number is not mistaken for a time.
+        (#"^(?:at\s+)?(\d{1,2})(?::(\d{2})\s*(am|pm)?|\s*(am|pm))$"#, { m, s in
+            clockTime(s, m).map { Parsed(kind: .once($0), scheduleType: "once") }
+        }),
     ]
+
+    private static func clockTime(_ s: String, _ m: NSTextCheckingResult) -> Date? {
+        let ns = s as NSString
+        func group(_ i: Int) -> String? {
+            m.range(at: i).location == NSNotFound ? nil : ns.substring(with: m.range(at: i))
+        }
+        guard let hourText = group(1), let hour = Int(hourText) else { return nil }
+        let minute = group(2).flatMap(Int.init) ?? 0
+        return nextClockTime(hour: hour, minute: minute, ampm: group(3) ?? group(4) ?? "", after: Date())
+    }
+
+    /// The next moment after `now` that the clock reads this time. Without
+    /// am/pm, "9:15" could be either (speech often drops it), so the sooner of
+    /// 9:15 and 21:15 wins: at 8pm it is tonight, not tomorrow morning. Hours
+    /// 0 and 13–23 are unambiguous 24-hour times. The clock is injectable for tests.
+    static func nextClockTime(hour: Int, minute: Int, ampm: String, after now: Date) -> Date? {
+        guard (0...59).contains(minute) else { return nil }
+        var hours: [Int]
+        switch ampm {
+        case "am", "pm":
+            guard (1...12).contains(hour) else { return nil }
+            hours = [hour % 12 + (ampm == "pm" ? 12 : 0)]
+        default:
+            guard (0...23).contains(hour) else { return nil }
+            hours = (1...12).contains(hour) ? [hour % 12, hour % 12 + 12] : [hour]
+        }
+        let calendar = Calendar.current
+        return hours.compactMap { hour -> Date? in
+            guard let today = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: now) else { return nil }
+            return today > now ? today : calendar.date(byAdding: .day, value: 1, to: today)
+        }.min()
+    }
 
     private static func once(offset: TimeInterval?, type: String) -> Parsed? {
         offset.map { Parsed(kind: .once(Date().addingTimeInterval($0)), scheduleType: type) }
@@ -71,9 +115,24 @@ enum ScheduleParser {
         return target
     }
 
+    /// One line for system prompts, so the model knows the Mac's local time and
+    /// can handle "at four" without asking. The clock is injectable for tests.
+    static func currentTimeNote(now: Date = Date(), timeZone: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "EEEE d MMMM yyyy, h:mm a"
+        return "The current local time on the user's Mac is \(formatter.string(from: now)) "
+            + "(time zone \(timeZone.identifier)). Use it for times and dates; never ask the user what time it is."
+    }
+
     /// Parse a schedule string. Accepts the regex forms above or a 5-field cron expression.
     static func parse(_ input: String) -> Parsed? {
+        // Speech transcripts write "p.m."; treat it like "pm".
         let s = input.trimmingCharacters(in: .whitespaces).lowercased()
+            .replacingOccurrences(of: "a.m.", with: "am")
+            .replacingOccurrences(of: "p.m.", with: "pm")
+            .trimmingCharacters(in: .whitespaces)
         for (pattern, handler) in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
             let range = NSRange(s.startIndex..., in: s)

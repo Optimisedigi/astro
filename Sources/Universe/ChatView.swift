@@ -29,6 +29,19 @@ final class ChatState: ObservableObject {
     /// letting the user press once and talk.
     @Published var startDiaryDictation = false
 
+    /// Set by the notch keyboard and ⇧⌥Space: the next open is for typing.
+    /// Cleared as soon as the panel opens.
+    var openForTypingOnly = false
+
+    /// True while the panel is in typing mode: the microphone stays off, even
+    /// after replies or when the diary hands it back, until the panel closes
+    /// or the mic button is pressed.
+    private(set) var isTypingOnly = false
+
+    /// The diary's unsaved entry. Held here rather than in the diary view so it
+    /// survives a tab switch: leaving the diary mid-dictation used to lose it.
+    @Published var diaryDraft = ""
+
     /// Persisted so the talk-and-listen choice survives a relaunch (Tama keeps
     /// the same flag on KokoroManager; we mirror it there so speech output and
     /// microphone capture stay in step).
@@ -82,10 +95,18 @@ final class ChatState: ObservableObject {
         // diary dictation suspends chat too, and reopening the panel mid-take
         // must not steal its handlers.
         if !voice.isListening, !NotchCallButton.isInCall { voiceModeSuspended = false }
+        // Opened for typing: no dictation and no live conversation.
+        if openForTypingOnly {
+            openForTypingOnly = false
+            switchToTyping()
+            return
+        }
+        isTypingOnly = false
         // With OpenAI live voice on, opening the panel with the mic on starts a
         // live conversation instead of the old dictation.
         if usesLiveVoice {
-            if voiceMode, !NotchCallButton.isInCall { startLiveCallFromPanel() }
+            // Opened by the diary pencil: the diary takes the mic, not a call.
+            if voiceMode, !NotchCallButton.isInCall, !startDiaryDictation { startLiveCallFromPanel() }
             return
         }
         guard voiceMode, !voiceModeSuspended else { return }
@@ -102,6 +123,7 @@ final class ChatState: ObservableObject {
     /// immediately — a hidden window must never hold the input device open.
     func panelDidClose() {
         panelVisible = false
+        isTypingOnly = false
         // A live conversation the panel opened ends with it, like dictation.
         // Calls started from the notch keep running.
         if panelStartedCall {
@@ -169,6 +191,8 @@ final class ChatState: ObservableObject {
     /// choice, so ⌥Space starts talking next time; otherwise it toggles the
     /// built-in dictation.
     func toggleMic() {
+        // The mic button always means "talk now", so it ends typing mode.
+        isTypingOnly = false
         if usesLiveVoice {
             // Free the mic from any dictation left running from before.
             voice.stopListening()
@@ -183,6 +207,11 @@ final class ChatState: ObservableObject {
                 voiceMode = true
                 startLiveCallFromPanel()
             }
+        } else if voiceModeSuspended {
+            // Mic is on in settings but paused (typing or the diary): the
+            // button means "talk now", not "turn the setting off".
+            voiceModeSuspended = false
+            enableVoiceMode()
         } else if voiceMode {
             disableVoiceMode()
         } else {
@@ -224,9 +253,28 @@ final class ChatState: ObservableObject {
         releaseVoiceHandlers()
     }
 
+    /// The user wants to type instead of talk: end any live conversation (a
+    /// call would keep listening while they type), stop chat dictation, and
+    /// hand focus to the composer. Suspends rather than switching the
+    /// Microphone setting off, so the next plain open still talks.
+    ///
+    /// Diary dictation is left to finish on its own: when the tab changes the
+    /// diary stops its take through `finishCapture`, which keeps the words.
+    /// Stopping the mic here would throw them away.
+    func switchToTyping() {
+        isTypingOnly = true
+        panelStartedCall = false
+        if NotchCallButton.isInCall { NotchCallButton.endCall() }
+        // Already suspended means the diary holds the mic (or typing mode is
+        // already on); only chat's own dictation needs stopping here.
+        if !voiceModeSuspended { suspendVoiceMode() }
+        composerFocusToken &+= 1
+    }
+
     /// Gives the microphone back after a suspension, if it was on to begin with.
     func resumeVoiceModeIfSuspended() {
-        guard voiceModeSuspended else { return }
+        // In typing mode the mic stays off, e.g. when leaving the diary.
+        guard voiceModeSuspended, !isTypingOnly else { return }
         voiceModeSuspended = false
         guard voiceMode, panelVisible, !usesLiveVoice, VoiceService.isAlreadyAuthorized else { return }
         wireUtteranceHandler()
@@ -438,7 +486,7 @@ final class ChatState: ObservableObject {
                     try? await Task.sleep(for: .seconds(4))
                     if MenuBarMood.shared.mood == .error { MenuBarMood.shared.setActivity(nil) }
                 }
-                if voiceMode { try? voice.startListening() }
+                if voiceMode, !voiceModeSuspended, !usesLiveVoice { try? voice.startListening() }
             }
         }
     }
@@ -511,7 +559,8 @@ struct ChatView: View {
                     }
                 }
             case 1:
-                DiaryListView(store: diaryStore, autoStartDictation: $state.startDiaryDictation)
+                DiaryListView(store: diaryStore, draft: $state.diaryDraft,
+                              autoStartDictation: $state.startDiaryDictation)
             case 2:
                 RoutineListView(store: schedules, kind: .reminder)
             case 3:
@@ -547,6 +596,9 @@ struct ChatView: View {
 
     /// Index of the Diary tab, so callers outside the view don't hardcode it.
     static let diaryTabIndex = 1
+
+    /// Index of the Chats tab, where the composer lives.
+    static let chatsTabIndex = 0
 
     var body: some View {
         VStack(spacing: 0) {
