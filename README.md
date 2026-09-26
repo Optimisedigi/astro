@@ -1,83 +1,124 @@
 # Astro
 
-A native macOS menubar agent: ask a question with `⌥Space`, get a streaming answer,
-and let it act on your machine through tools.
+A native macOS assistant that lives in your menu bar and beside the notch. Chat, talk hands-free, create and discuss images, keep a journal, and set reminders without leaving what you're doing.
 
-Built as a working study of [Tama](https://github.com/) — see [SPEC.md](SPEC.md) for the
-full reverse-engineering notes that informed the architecture.
+## A look inside
 
-## Status
+These captures show Astro's actual SwiftUI content views with **sample conversations and entries**, not private user data or recordings of live calls. They are rendered documentation previews; window chrome and some controls are omitted.
 
-| Area | State |
-|---|---|
-| Menubar app, no Dock icon | working |
-| `⌥Space` global hotkey → floating panel | working |
-| Streaming chat (Anthropic) | working |
-| Agent loop with bash/read/write/edit | working, workspace-contained |
-| Reminders + routines (cron & natural language) | working |
-| Voice in (SFSpeechRecognizer) / out (Kokoro TTS via MLX) | working |
-| Notch voice calls, optionally on OpenAI live voice (ChatGPT plan) | built, not yet tested live |
+### Chat
 
-## Run it
+![Astro chat showing a sample afternoon plan](docs/screenshots/chat.png)
+
+### Image creation
+
+![Astro creating an image with the Nebulising loading indicator](docs/screenshots/image-generation.png)
+
+### Chat about images
+
+![An attached sample journal screenshot and a response discussing its contents](docs/screenshots/image-chat.png)
+
+### Journal
+
+![Astro journal with dated threads and coloured Highlight, New idea and Do later markers](docs/screenshots/journal-timeline.png)
+
+### Reminders
+
+![Astro reminder rows showing a screen break and a daily journal reminder](docs/screenshots/reminders.png)
+
+### Memory
+
+![Astro memory rows showing sample writing preferences and communication guidance](docs/screenshots/memory.png)
+
+## Features
+
+### Chat and model selection
+
+- Stream replies with Markdown, code blocks, tables and checklists. Browse saved conversations and start fresh chats.
+- Open **AI Settings → Active Model** to select a different model. Connect the matching provider in the same settings sheet.
+- The model picker includes **OpenAI GPT, Anthropic Claude, Google Gemini, Kimi, Moonshot, MiniMax and Xiaomi MiMo** options. Model availability depends on the connected account, plan and provider.
+- OpenAI, Anthropic, Gemini and Kimi offer account sign-in; Moonshot, MiniMax and MiMo use API keys. Credentials are stored in macOS Keychain.
+- Tools let Astro read and edit files, run shell commands, search the web and fetch pages. Shell commands run with your user account's permissions, so review what you ask it to execute.
+
+### Image creation and image conversations
+
+Ask Astro to make a picture in chat or during a live voice call. **Image generation uses your ChatGPT sign-in**, even if another provider is selected for chat.
+
+- Request square, landscape or portrait artwork. While it is being created, the orb and animated **Nebulising...** indicator show progress.
+- Finished images appear in the chat reply, or in a preview window during a call. A copy is saved in `~/Pictures/Astro`.
+- Drop an image onto the notch attachment area or paste one into chat, then ask about it. OpenAI live voice can also receive images during a call.
+- Vision-capable models can discuss the image itself. For text-only models, Astro includes recognised text from the image; that is not a substitute for visual understanding.
+
+### Journal: capture, tidy and revisit your day
+
+The **Journal** tab keeps entries in dated, connected threads. It is separate from chat history and assistant memory.
+
+1. **Write or dictate.** Type into “What happened today?” or use the microphone. The notch pencil shortcut can start journal dictation directly.
+2. **Tidy the entry.** Press **Format** to ask the selected AI model to clean up the writing. Stopping dictation also triggers formatting; it is intended to tidy your words, not answer them as a chat.
+3. **Save.** Press **Save** to add the entry to today's thread. Your unsaved draft survives switching tabs.
+4. **Revisit.** Edit, format or delete saved entries. Mark them **Highlight**, **Do later** or **New idea** to make them easier to find visually.
+
+Journal entries are stored locally and are **not automatically included in chat prompts or memory**. Formatting sends the entry being formatted to the selected AI provider. A **Do later** marker is an organisation aid, not a scheduled reminder; ask Astro separately to notify you at a time.
+
+### Reminders and routines
+
+Use plain language, such as “Remind me to stretch in 45 minutes” or “Remind me to write my journal every day at 6pm.”
+
+- **Reminders** deliver a notch alert or macOS notification. View and remove scheduled items in the Reminders tab.
+- **Routines** run an assistant prompt on a schedule, such as preparing a daily summary.
+- Schedules support one-off times, repeating intervals and cron expressions. Next-run times use the Mac's local time zone.
+- Keep Astro running for schedules to fire. Due jobs are checked about every 30 seconds and again when Astro starts; it does not wake a sleeping Mac. Allow notifications in macOS settings for system alerts.
+
+**Layout and dimensions:** the main panel starts at **680 × 560 points**, shared by chat, reminders and journal. The journal switches to its compact layout below **520 points** wide; its composer is **82 points** high when idle and **136 points** while writing or dictating. The screenshots above are content crops rendered at 2× resolution, not fixed screen-size requirements.
+
+### Memory across conversations
+
+Tell Astro what you want it to remember, such as your writing preferences or the project you're working on.
+
+- **Facts** hold information about you, your preferences and projects.
+- **Soul** holds guidance about how Astro should work with you, including tone and communication preferences.
+- Open **Memory** in settings to inspect, edit or delete individual entries, or use **Forget All** to clear them.
+- Memory is stored locally. A size-limited selection is included in assistant prompts, so it is sent to the AI provider used for that conversation. Journal entries remain separate.
+
+### Voice, OpenAI Live and GPT-Live
+
+**OpenAI Live has been tested in live use.** Start and end a call from the notch or the panel microphone. Speech streams both ways, you can interrupt a reply, and the conversation's transcript is visible in the panel. Minimise the panel to keep talking; the transcript is saved as a **Voice Call** chat when the call ends.
+
+Choose the engine, voice and live model in **Voice Settings**:
+
+- **OpenAI Live:** uses the ChatGPT account connected in AI Settings. The live model choices include **GPT Realtime 2.1**, **GPT Realtime 2.1 mini** and **GPT-Live 1**.
+- **GPT-Live 1:** ChatGPT's live voice option, with its own voice selection. It can discuss shared images and call tools, including image generation and reminders.
+- **Built-in voice:** Apple speech recognition → the selected chat model → Kokoro speech output, with macOS speech as a fallback.
+- **Journal dictation:** captures and formats an entry instead of starting a conversation.
+
+Microphone and speech-recognition permissions are needed for the corresponding voice features. Connected providers' plan limits still apply.
+
+### More desktop tools
+
+- **Tasks:** named checklists, completion tracking and quick access from a tab.
+- **Skills:** local instruction files for specialised tasks, including installation from GitHub.
+- **Clipboard history:** revisit copied text, images and file references.
+- **Optional local knowledge:** search indexed material through `qmd` when it is installed and configured.
+- **Permissions dashboard:** check microphone, speech recognition, Accessibility, screen recording, Full Disk Access and notifications as needed for the tools you use.
+
+## Install on your Mac
+
+Requires **macOS 14+**, **Xcode 15+** and `xcodegen`. The installer builds Astro locally and installs it into `/Applications`; this is not a prebuilt, notarised download.
 
 ```sh
-swift build && .build/debug/Universe --selftest   # offline checks, no API key needed
-```
-
-For the real app (the global hotkey needs a signed bundle):
-
-```sh
-xcodegen generate
-xcodebuild -project Universe.xcodeproj -scheme Universe -configuration Debug build
-open ~/Library/Developer/Xcode/DerivedData/Universe-*/Build/Products/Debug/Astro.app
-```
-
-The app was renamed from Universe to Astro. Code, the Xcode scheme, the bundle ID
-(`com.universe.app`), the Keychain service and the data folder keep the old name on
-purpose, so existing permissions, sign-ins and chats carry over.
-
-Add your Anthropic API key via the menubar → Settings. It is stored in the Keychain.
-
-## Layout
-
-```
-Sources/Universe/
-  UniverseApp.swift    app entry, menubar, startup wiring
-  PanelController.swift borderless floating panel
-  HotKeyManager.swift   Carbon global hotkey
-  ClaudeService.swift   streaming SSE client with tool-use parsing
-  AgentLoop.swift       stream → run tools → feed results back
-  Tools.swift           bash/read/write/edit + registry
-  ScheduleParser.swift  "30m", "every 2h", "tomorrow 3pm", cron
-  ScheduleStore.swift   JSON persistence, polling, notifications
-  VoiceService.swift    speech in and out
-  ChatView.swift        panel UI: input row, voice glow, border beam, tabs
-  MascotView.swift      the thinking orb beside "Ask anything"
-  VoiceGlow.swift       sound-reactive glow (SwiftUI port of voice-glow)
-  OpenAIRealtimeCallSession.swift, GPTLive*.swift  OpenAI live voice calls
-  ChatGPTWebSearch.swift web search on the ChatGPT plan
-  SelfTest.swift        offline verification of the whole loop
-Vendor/BorderBeamKit/   border beam (MIT, see VENDORED.md)
-Vendor/ThinkingOrbsKit/ Thinking orb (MIT, see VENDORED.md)
-```
-
-Data lives in `~/Library/Application Support/Universe/`.
-
-## Notes
-
-- Tools are contained to a workspace directory; symlink and path-escape attempts are
-  rejected and covered by tests.
-- `--selftest` runs the agent loop against a scripted model, so it needs no network.
-
-## Install
-
-```bash
+brew install xcodegen
+git clone https://github.com/Optimisedigi/astro.git
+cd astro
 ./install.sh
 ```
 
-Builds Release, runs the self-test, and installs to `/Applications/Astro.app`. An old
-`Universe.app` is moved to the Trash. Signed with the local Apple Development
-certificate, so it runs on the machine that built it; shipping to other Macs would
-need a Developer ID certificate and notarization.
+The installer builds the app, runs its self-test and copies it into Applications. Launch **Astro**, connect a provider in **AI Settings**, and grant only the macOS permissions needed for the features you use.
 
-Then: menubar icon → Settings → **Sign in with Claude**. Global hotkey is ⌥Space.
+## Development
+
+The app is named **Astro**. The Swift package, target and executable retain the internal name `Universe` for compatibility.
+
+```sh
+swift build
+swift run Universe --selftest
+```
