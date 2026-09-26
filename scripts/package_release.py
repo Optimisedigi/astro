@@ -136,7 +136,7 @@ def package(app, destination, profile):
         metadata = {"version": version, "architecture": "arm64", "minimum_macos": "15.0", "sha256": digest,
                     "notarization": {"app": app_submission, "dmg": dmg_submission}}
         (destination / "release.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
-    print(f"Verified release files: {destination}\nNothing has been uploaded or installed.")
+    print(f"Verified release files: {destination}\nNotarization uploads went to Apple. Nothing has been published to GitHub or installed.")
 
 
 def file_digest(source):

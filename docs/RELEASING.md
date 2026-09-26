@@ -59,7 +59,7 @@ The script:
 - Copies the app to temporary staging, submits it to Apple, requires **Accepted**, attaches the notarization ticket and checks Gatekeeper's execution assessment.
 - Creates a compressed **Astro.dmg** containing **Astro.app** and an **Applications** shortcut. Signs and notarizes the DMG, attaches its ticket, then verifies its structure and Gatekeeper assessment.
 - Produces `Astro.dmg`, `SHA256SUMS`, `release.json` and `astro.rb` only after those checks. The cask contains the exact final DMG checksum, not `:no_check`.
-- Never installs, uploads, deletes user data, changes Gatekeeper or modifies the source app.
+- Uploads the staged app and DMG to Apple for notarization, but never publishes a GitHub release, installs the app, deletes user data, changes Gatekeeper or modifies the source app.
 
 No signing or notarization failure has an unsigned fallback. Failed Apple submissions can be investigated with `xcrun notarytool log` using their submission ID and the same Keychain profile.
 
