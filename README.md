@@ -8,24 +8,26 @@ A native macOS assistant that lives in your menu bar and beside the notch. Chat,
 
 ## Install Astro
 
-**The first signed DMG and Homebrew release is not available yet.** Packaging is being prepared; publication is waiting for Apple Developer ID signing and notarization. [View GitHub Releases](https://github.com/Optimisedigi/astro/releases) for release availability.
+**[Download Astro for Mac (.dmg)](https://github.com/Optimisedigi/astro/releases/latest/download/Astro.dmg)** — signed with Developer ID and notarized by Apple. [Release notes and checksums](https://github.com/Optimisedigi/astro/releases/latest).
 
-The planned download supports **Apple silicon Macs (M1 or later), macOS 15 or later**. End users will not need Xcode or a compiler.
+Supports **Apple silicon Macs (M1 or later), macOS 15 or later**. No Xcode or compiler is required.
 
 ### Mac installer (DMG)
 
-Once the signed release is published, download **Astro.dmg**, open it, and drag **Astro.app** into **Applications**. Launch Astro and connect your AI account. The README will link directly to the verified DMG when it is available; there is no unsigned download to work around macOS security checks.
+Download **Astro.dmg**, open it, and drag **Astro.app** into **Applications**. Launch Astro and connect your AI account. Do not disable Gatekeeper to install Astro.
 
 ### Homebrew
 
-The Homebrew installer will download that same signed DMG, rather than compiling Astro. **These commands become available after the first release and cask are published:**
+Homebrew downloads the same signed DMG and verifies its pinned checksum, rather than compiling Astro:
 
 ```sh
 brew tap optimisedigi/astro https://github.com/Optimisedigi/astro
 brew install --cask optimisedigi/astro/astro
 ```
 
-For now, the available installation path is the [developer source build](#build-from-source-developers). Maintainers can follow the [signed-release guide](docs/RELEASING.md).
+The DMG passed notarization, Gatekeeper checks, and an isolated installation/self-test on the build Mac. Separate clean-Mac, live-provider, and full permission-prompt testing remain unverified; see the release notes for limits. Back up existing local data before upgrading.
+
+Developers can [build from source](#build-from-source-developers). Maintainers can follow the [signed-release guide](docs/RELEASING.md).
 
 ## A look inside
 
