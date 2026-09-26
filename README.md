@@ -2,9 +2,13 @@
 
 A native macOS assistant that lives in your menu bar and beside the notch. Chat, talk hands-free, create and discuss images, keep a journal, and set reminders without leaving what you're doing.
 
+![Astro on macOS with the notch controls and live voice panel listening](docs/screenshots/astro-live-voice.jpg)
+
+**Press Option + Space (⌥Space) and start talking.** Once voice is set up and microphone access is granted, the shortcut opens Astro and starts listening automatically. No extra microphone click is needed.
+
 ## A look inside
 
-These captures show Astro's actual SwiftUI content views with **sample conversations and entries**, not private user data or recordings of live calls. They are rendered documentation previews; window chrome and some controls are omitted.
+The feature previews below show Astro's SwiftUI content views with **sample conversations and entries**, not private user data or recordings of live calls. Unlike the main screenshot above, these are rendered documentation previews; window chrome and some controls are omitted.
 
 ### Chat
 
