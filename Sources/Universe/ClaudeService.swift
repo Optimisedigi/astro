@@ -53,6 +53,14 @@ actor ClaudeService {
     Reminders fire macOS notifications; routines run a prompt and notify with the result. \
     Use them proactively and finish tasks completely.
 
+    The user has a personal knowledge library of saved videos, talks, transcripts and \
+    documents, searchable with `knowledge_search`. Search it first for any question about \
+    a topic, person, idea or piece of content they might have saved, before answering \
+    from your own knowledge. When your answer uses the library, open by saying it came \
+    from their knowledge library and name each source title (with its [mm:ss] timestamp \
+    when there is one). If the library had nothing relevant, say so briefly and then \
+    answer from your own knowledge.
+
     You have long-term memory. Use `remember` proactively whenever the user shares something \
     meaningful about themselves — their name, preferences, projects, people in their life. \
     Keep each fact atomic. Use `recall` to look up details not already in your context, and \
@@ -103,6 +111,10 @@ actor ClaudeService {
         messages: [[String: Any]], tools: [[String: Any]],
         continuation: AsyncThrowingStream<StreamEvent, Error>.Continuation
     ) async throws {
+        // The chat builds pictures for the model the user picked; a fallback
+        // that cannot see must not receive them, or it rejects the whole turn
+        // (Kimi: "invalid part type: image").
+        let messages = model.supportsVision ? messages : Self.withoutImages(messages)
         switch model.provider {
         case .anthropic:
             try await streamAnthropic(messages: messages, tools: tools, model: model, continuation: continuation)
@@ -114,6 +126,21 @@ actor ClaudeService {
             try await streamKimi(messages: messages, tools: tools, model: model, continuation: continuation)
         case .moonshot, .minimax, .xiaomi, .xiaomiAPI:
             try await streamOpenAICompatible(messages: messages, tools: tools, model: model, provider: model.provider, continuation: continuation)
+        }
+    }
+
+    /// Swap each picture for a short note, keeping the text read out of it
+    /// (already its own block), for a model that cannot see images.
+    static func withoutImages(_ messages: [[String: Any]]) -> [[String: Any]] {
+        messages.map { message in
+            guard let blocks = message["content"] as? [[String: Any]],
+                  blocks.contains(where: { $0["type"] as? String == "image" }) else { return message }
+            var stripped = message
+            stripped["content"] = blocks.map { block -> [String: Any] in
+                guard block["type"] as? String == "image" else { return block }
+                return ["type": "text", "text": "[An image was attached, but this model cannot see images.]"]
+            }
+            return stripped
         }
     }
 
@@ -248,29 +275,10 @@ actor ClaudeService {
         request.setValue(accountId, forHTTPHeaderField: "chatgpt-account-id")
         request.setValue("universe/0.1 (macOS)", forHTTPHeaderField: "user-agent")
 
-        // Convert Anthropic message format to OpenAI format
         let systemText = await Self.systemPromptWithMemory()
-        let openAIMessages: [[String: Any]] = [
-            ["role": "system", "content": systemText],
-        ] + messages.map { msg -> [String: Any] in
-            var m = msg
-            if m["role"] as? String == "assistant", let content = m["content"] as? [[String: Any]] {
-                // Convert Anthropic content blocks to plain text for OpenAI
-                let text = content.compactMap { block -> String? in
-                    if let t = block["text"] as? String { return t }
-                    return nil
-                }.joined()
-                m["content"] = text
-            }
-            return m
-        }
-
-        var body: [String: Any] = [
-            "model": model.id,
-            "stream": true,
-            "input": openAIMessages,
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.httpBody = try JSONSerialization.data(withJSONObject: Self.openAIBody(
+            messages: messages, tools: tools, model: model, system: systemText
+        ))
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
@@ -280,6 +288,7 @@ actor ClaudeService {
         }
 
         // OpenAI SSE: response.output_text.delta for text, response.output_item.done for tools
+        var calledTools = false
         for try await line in bytes.lines {
             guard line.hasPrefix("data: ") else { continue }
             let payload = String(line.dropFirst(6))
@@ -300,15 +309,42 @@ actor ClaudeService {
                    let callId = item["call_id"] as? String {
                     let args = item["arguments"] as? String ?? "{}"
                     let input = (try? JSONSerialization.jsonObject(with: Data(args.utf8))) as? [String: Any] ?? [:]
+                    calledTools = true
                     continuation.yield(.toolUse(id: callId, name: name, input: input))
                 }
             case "response.completed":
-                continuation.yield(.stop(reason: "end_turn"))
+                // The agent loop runs the tools and asks again only after a
+                // tool stop; "end_turn" here dropped every tool call.
+                continuation.yield(.stop(reason: calledTools ? "tool_use" : "end_turn"))
             default:
                 continue
             }
         }
         continuation.finish()
+    }
+
+    /// The Responses request body. Messages arrive in Anthropic format; the
+    /// Codex converter turns pictures into `input_image`, and tool calls and
+    /// results into `function_call` / `function_call_output`. Before it was
+    /// used, the tools (the knowledge library among them) were never sent,
+    /// and attached images went over in a shape OpenAI does not read.
+    static func openAIBody(
+        messages: [[String: Any]], tools: [[String: Any]], model: ModelInfo, system: String
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": model.id,
+            "stream": true,
+            // Required: without it the ChatGPT endpoint rejects every request
+            // (HTTP 400 "Store must be set to false") and chat silently falls
+            // through to the next connected model.
+            "store": false,
+            "input": [["role": "system", "content": system]] + CodexRequestBuilder.convertMessages(messages),
+        ]
+        if !tools.isEmpty {
+            body["tools"] = CodexRequestBuilder.convertTools(tools)
+            body["tool_choice"] = "auto"
+        }
+        return body
     }
 
     // MARK: - Gemini
@@ -329,21 +365,9 @@ actor ClaudeService {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue("universe/0.1 (macOS)", forHTTPHeaderField: "user-agent")
 
-        // Convert to Gemini format
-        let contents: [[String: Any]] = messages.map { msg in
-            let role = (msg["role"] as? String == "assistant") ? "model" : "user"
-            var parts: [[String: Any]] = []
-            if let content = msg["content"] as? String {
-                parts.append(["text": content])
-            } else if let content = msg["content"] as? [[String: Any]] {
-                for block in content {
-                    if let text = block["text"] as? String {
-                        parts.append(["text": text])
-                    }
-                }
-            }
-            return ["role": role, "parts": parts]
-        }
+        // Pictures go over as `inlineData`; a text-only conversion dropped
+        // attached images and left Gemini only the text read out of them.
+        let contents = GeminiRequestBuilder.convertMessages(messages)
 
         let systemText = await Self.systemPromptWithMemory()
         var body: [String: Any] = [

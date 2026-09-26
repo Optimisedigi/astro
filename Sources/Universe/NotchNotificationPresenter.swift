@@ -162,7 +162,7 @@ enum NotchNotificationPresenter {
         NotchOverlayTracker.overlayDidShow()
         playNotificationSound()
 
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.notchScreen else { return }
 
         // Remove oldest if at max capacity.
         if activeNotifications.count >= maxVisibleNotifications {
@@ -597,7 +597,7 @@ enum NotchNotificationPresenter {
         let notification = activeNotifications.remove(at: index)
         notification.timer?.invalidate()
 
-        guard let screen = NSScreen.main else {
+        guard let screen = NSScreen.notchScreen else {
             notification.panel.orderOut(nil)
             updateStackPositions()
             return
@@ -622,7 +622,7 @@ enum NotchNotificationPresenter {
 
     /// Update positions of stacked (non-notch) notifications.
     private static func updateStackPositions() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.notchScreen else { return }
 
         let screenFrame = screen.frame
         let originX = screenFrame.midX - fallbackToastWidth / 2

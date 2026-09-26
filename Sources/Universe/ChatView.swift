@@ -9,8 +9,26 @@ final class ChatState: ObservableObject {
     @Published var toolRuns: [ToolRun] = []
     @Published var errorMessage: String?
 
-    /// Images dropped on the notch wing, riding along with the next message.
+    /// Images dropped or pasted in, riding along with the next message.
     @Published var pendingAttachments: [ImageAttachment] = []
+
+    /// Images received but still being shrunk and read.
+    @Published var imagesBeingRead = 0
+
+    /// Why the last image could not be added; cleared by the next one.
+    @Published var imageNotice: String?
+
+    /// Shrink, store and read the dropped or pasted bytes, then stage them.
+    /// Says so in the composer when none of them could be used.
+    func loadImages(_ payloads: [ImageAttachmentLoader.Payload]) async {
+        imagesBeingRead += 1
+        let attachments = await ImageAttachmentLoader.attachments(from: payloads)
+        imagesBeingRead -= 1
+        imageNotice = attachments.isEmpty
+            ? "That image couldn't be added. Try a PNG, JPEG, HEIC or GIF under 30 MB."
+            : nil
+        attach(attachments)
+    }
 
     let store = SessionStore()
     /// Smooths lumpy token bursts into steady typing.
@@ -319,6 +337,16 @@ final class ChatState: ObservableObject {
     static func contentBlocks(for message: Session.Message, vision: Bool) -> [[String: Any]] {
         var blocks: [[String: Any]] = []
 
+        // A picture Astro made itself: providers reject images in assistant
+        // turns, so the model is reminded of it in words.
+        if message.role == "assistant" {
+            for attachment in message.attachments ?? [] {
+                blocks.append(["type": "text", "text": "[You made an image here: \(attachment.safeLabel)]"])
+            }
+            if !message.text.isEmpty { blocks.append(["type": "text", "text": message.text]) }
+            return blocks
+        }
+
         for attachment in message.attachments ?? [] {
             if vision, let base64 = attachment.base64() {
                 blocks.append([
@@ -367,6 +395,30 @@ final class ChatState: ObservableObject {
         self.session = session
     }
 
+    /// A picture the image tool made during a chat turn, added to that turn's
+    /// reply (found by id, so it can't land in a different message).
+    func appendGeneratedImage(_ attachment: ImageAttachment, toReply replyID: UUID) {
+        guard let index = session.messages.firstIndex(where: { $0.id == replyID }) else {
+            previewGeneratedImage(attachment)
+            return
+        }
+        session.messages[index].attachments = (session.messages[index].attachments ?? []) + [attachment]
+    }
+
+    /// A picture made outside a chat turn (a voice call, a scheduled routine),
+    /// shown in its own preview window.
+    func previewGeneratedImage(_ attachment: ImageAttachment) {
+        guard let image = NSImage(contentsOf: attachment.fileURL) else { return }
+        let preview = ImagePreviewPanel(image: image, title: "Image from Astro")
+        preview.center()
+        preview.onDismiss = { [weak self] in self?.imagePreview = nil }
+        preview.makeKeyAndOrderFront(nil)
+        imagePreview = preview
+    }
+
+    /// The open preview, held so it stays up until closed.
+    private var imagePreview: ImagePreviewPanel?
+
     /// Take a dropped image. Silently ignores extras past the per-message cap
     /// rather than growing a turn without bound.
     func attach(_ attachments: [ImageAttachment]) {
@@ -377,6 +429,34 @@ final class ChatState: ObservableObject {
             }
             pendingAttachments.append(attachment)
         }
+        // Straight to the question: the cursor waits in the text field.
+        composerFocusToken &+= 1
+        shareStagedImagesWithCall()
+    }
+
+    /// During a live call, staged pictures go straight to the voice so the
+    /// user can talk about them, instead of waiting for a typed message.
+    /// `explainRefusal` is off when a call merely starts with pictures staged:
+    /// the user may mean to type about them later, so there is nothing to warn about.
+    func shareStagedImagesWithCall(explainRefusal: Bool = true) {
+        guard NotchCallButton.isInCall, !pendingAttachments.isEmpty else { return }
+        if NotchCallButton.shareImagesWithCall(pendingAttachments) {
+            // Now part of the call's conversation, which shows and saves them.
+            pendingAttachments = []
+            imageNotice = nil
+        } else if explainRefusal {
+            imageNotice = Self.voiceCannotSeeImages
+        }
+    }
+
+    static let voiceCannotSeeImages =
+        "The built-in voice can't look at images. Switch to OpenAI live voice in Voice Settings, or type your question."
+
+    /// Pictures a call took but never showed to its voice (it ended before
+    /// connecting) come back, ahead of any staged since.
+    func restoreStagedImages(_ images: [ImageAttachment]) {
+        let staged = Set(pendingAttachments.map(\.id))
+        pendingAttachments = images.filter { !staged.contains($0.id) } + pendingAttachments
     }
 
     /// Drop a staged image before it is sent, deleting its file with it.
@@ -385,12 +465,21 @@ final class ChatState: ObservableObject {
         ImageAttachmentLoader.discard(attachment)
     }
 
+    static func shouldDiscardOnRetry(_ message: Session.Message) -> Bool {
+        message.role == "assistant" && message.text.isEmpty && (message.attachments?.isEmpty ?? true)
+    }
+
     func retryLastMessage() {
         guard !isStreaming, let lastUser = session.messages.last(where: { $0.role == "user" }) else { return }
         let last = lastUser.text
+        // Images staged for the next message stay staged; the retry resends
+        // only the failed message's own pictures.
+        let staged = pendingAttachments
+        defer { pendingAttachments = staged }
         pendingAttachments = lastUser.attachments ?? []
-        // Drop the empty assistant placeholder left by the failed turn.
-        if session.messages.last?.role == "assistant", session.messages.last?.text.isEmpty == true {
+        // Drop only a truly empty placeholder. An image can arrive before its
+        // caption; a failed follow-up must not erase that generated picture.
+        if let last = session.messages.last, Self.shouldDiscardOnRetry(last) {
             session.messages.removeLast()
         }
         if session.messages.last?.role == "user" { session.messages.removeLast() }
@@ -413,6 +502,7 @@ final class ChatState: ObservableObject {
         input = ""
         pendingAttachments = []
         errorMessage = nil
+        imageNotice = nil
 
         session.messages.append(.init(role: "user", text: text, attachments: attachments.isEmpty ? nil : attachments))
         if session.messages.count == 1 {
@@ -451,16 +541,24 @@ final class ChatState: ObservableObject {
                 if speak { speech.beginStreaming() }
 
                 var firstToken = true
-                try await loop.run(apiMessages: apiMessages, streamProvider: ClaudeService.shared.streamEvents) { [weak self] delta in
-                    guard let self else { return }
-                    if firstToken {
-                        firstToken = false
-                        MenuBarMood.shared.setActivity(.responding)
+                // Pictures made during this turn go into this turn's reply.
+                let replyID = session.messages.last?.id
+                let deliver: @MainActor @Sendable (ImageAttachment) -> Void = { [weak self] image in
+                    guard let self, let replyID else { return }
+                    self.appendGeneratedImage(image, toReply: replyID)
+                }
+                try await ImageGenerationTool.$deliver.withValue(deliver) {
+                    try await loop.run(apiMessages: apiMessages, streamProvider: ClaudeService.shared.streamEvents) { [weak self] delta in
+                        guard let self else { return }
+                        if firstToken {
+                            firstToken = false
+                            MenuBarMood.shared.setActivity(.responding)
+                        }
+                        self.queue.append(delta)
+                        if speak { self.speech.feedChunk(delta) }
+                    } onToolActivity: { [weak self] activity in
+                        self?.apply(activity)
                     }
-                    self.queue.append(delta)
-                    if speak { self.speech.feedChunk(delta) }
-                } onToolActivity: { [weak self] activity in
-                    self?.apply(activity)
                 }
                 queue.finish() // flush before anything reads the final text
                 // Panel dismissed mid-turn: surface the reply as a notch toast (Tama behavior).
@@ -591,10 +689,11 @@ struct ChatView: View {
                     tuning: Self.beamTuning)
     }
 
-    /// Tama's tab set, plus Diary — which is local-only and never reaches a model.
-    private let tabLabels = ["Chats", "Diary", "Reminders", "Routines", "Tasks", "Skills", "Tools"]
+    /// Tama's tab set, plus Journal (the diary, in code) — local-only, never
+    /// sent to a model.
+    private let tabLabels = ["Chats", "Journal", "Reminders", "Routines", "Tasks", "Skills", "Tools"]
 
-    /// Index of the Diary tab, so callers outside the view don't hardcode it.
+    /// Index of the Journal tab, so callers outside the view don't hardcode it.
     static let diaryTabIndex = 1
 
     /// Index of the Chats tab, where the composer lives.
@@ -610,6 +709,7 @@ struct ChatView: View {
                       active: state.panelVisible && (voice.isListening || live.isActive || state.isStreaming),
                       cornerRadius: 0) {
                 inputRow
+                    .background(WindowDragHandle())
             }
 
             // Tabs and their content sit in their own box under the input row,
@@ -672,14 +772,14 @@ struct ChatView: View {
                 if live.isActive {
                     // A live voice conversation: what you said and what GPT said,
                     // word by word as it arrives.
-                    if live.transcript.isEmpty {
+                    if live.transcript.isEmpty && !live.isGeneratingImage {
                         Text("Listening…")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity)
                             .padding(.top, 60)
                     } else {
-                        MessageListView(messages: live.transcript)
+                        MessageListView(messages: live.transcript, toolRuns: live.imageToolRuns)
                     }
                 } else if state.session.messages.isEmpty {
                     EmptyChatView(needsSignIn: state.needsSignIn) { SettingsWindowController.shared.show() }
@@ -692,6 +792,37 @@ struct ChatView: View {
                         errorMessage: state.errorMessage,
                         retry: state.retryLastMessage
                     )
+                }
+            }
+            .onChange(of: state.session.messages.last?.attachments?.count) { _, count in
+                // The image is delivered before the model writes its follow-up.
+                // Bring that newly visible bubble into view immediately.
+                if count ?? 0 > 0, let last = state.session.messages.last {
+                    if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    } else {
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+            }
+            .onChange(of: live.isGeneratingImage) { _, generating in
+                if generating {
+                    if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                        proxy.scrollTo("tool-progress", anchor: .bottom)
+                    } else {
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("tool-progress", anchor: .bottom) }
+                    }
+                }
+            }
+            .onChange(of: state.toolRuns.count) { _, _ in
+                // Tool rows sit below the reply. Without this the image request
+                // can run for a minute while its progress stays offscreen.
+                if state.toolRuns.last?.showsImageOrb == true {
+                    if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                        proxy.scrollTo("tool-progress", anchor: .bottom)
+                    } else {
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("tool-progress", anchor: .bottom) }
+                    }
                 }
             }
             .onChange(of: state.session.messages.last?.text) { _, _ in
@@ -709,6 +840,27 @@ struct ChatView: View {
 
     private var inputRow: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Images are dropped or pasted anywhere on the panel; the only sign
+            // of one on its way is this line while it is shrunk and read.
+            if state.imagesBeingRead > 0 {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Reading image…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.leading, 58)
+                .padding(.top, 8)
+            }
+            if let notice = state.imageNotice {
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .padding(.leading, 58)
+                    .padding(.trailing, 24)
+                    .padding(.top, 4)
+                    .accessibilityLabel("Error: \(notice)")
+            }
             if !state.pendingAttachments.isEmpty {
                 HStack(spacing: 8) {
                     ForEach(state.pendingAttachments) { attachment in
@@ -919,20 +1071,25 @@ struct MessageListView: View {
     var errorMessage: String?
     var retry: (() -> Void)?
 
+    static func shouldDisplay(_ message: Session.Message) -> Bool {
+        message.role != "assistant" || !message.text.isEmpty || !(message.attachments?.isEmpty ?? true)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(messages) { message in
-                // An assistant turn that has not produced text yet shows a skeleton or
-                // tool rows instead of an empty bubble.
-                if !(message.role == "assistant" && message.text.isEmpty) {
+                // A generated image appears as soon as it arrives, even while
+                // the model is still composing the text of the reply.
+                if Self.shouldDisplay(message) {
                     MessageBubble(message: message, isStreaming: isStreaming && message.id == messages.last?.id)
                         .id(message.id)
                 }
             }
             if !toolRuns.isEmpty {
                 ToolIndicatorView(runs: toolRuns)
+                    .id("tool-progress")
             }
-            if isStreaming, messages.last?.text.isEmpty == true, toolRuns.isEmpty {
+            if isStreaming, messages.last.map({ !Self.shouldDisplay($0) }) == true, toolRuns.isEmpty {
                 SkeletonView()
             }
             if let errorMessage {
@@ -1028,7 +1185,20 @@ struct MessageBubble: View {
                 }
             }
         } else {
-            ResponseTextView(text: message.text, isStreaming: isStreaming)
+            VStack(alignment: .leading, spacing: 6) {
+                // Pictures Astro made; click one to open the full image.
+                ForEach(message.attachments ?? []) { attachment in
+                    Button { NSWorkspace.shared.open(attachment.fileURL) } label: {
+                        AttachmentThumbnail(attachment: attachment, maxWidth: 320)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open full size")
+                    .accessibilityLabel("Image Astro made. Open full size")
+                }
+                if !message.text.isEmpty || isStreaming {
+                    ResponseTextView(text: message.text, isStreaming: isStreaming)
+                }
+            }
         }
     }
 }

@@ -40,7 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 print("usage: Universe --render-states <dir>")
                 exit(2)
             }
-            exit(RenderStates.run(directory: CommandLine.arguments[i + 1]) ? 0 : 1)
+            exit(RenderStates.run(directory: CommandLine.arguments[i + 1],
+                                  only: CommandLine.arguments.dropFirst(i + 2).first) ? 0 : 1)
         }
         if let i = CommandLine.arguments.firstIndex(of: "--dictation-check") {
             guard i + 2 < CommandLine.arguments.count else {
@@ -64,6 +65,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         HotKeyManager.shared.onTypingHotKey = {
             PanelController.shared.toggleForTyping()
+        }
+        HotKeyManager.shared.onImageHotKey = {
+            PanelController.shared.openForImage()
         }
         HotKeyManager.shared.register()
         ScheduleStore.shared.start()

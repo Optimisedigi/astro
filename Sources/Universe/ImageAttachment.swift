@@ -138,15 +138,7 @@ enum ImageAttachmentLoader {
             .urlReadingContentsConformToTypes: [UTType.image.identifier],
         ]
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] {
-            for url in urls.prefix(maxPerMessage) {
-                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                guard size > 0, size <= maxSourceBytes else {
-                    logger.warning("Dropped file rejected: \(size, privacy: .public) bytes")
-                    continue
-                }
-                guard let data = try? Data(contentsOf: url) else { continue }
-                results.append(Payload(name: url.lastPathComponent, data: data))
-            }
+            results = payloads(fromFiles: urls)
         }
 
         if results.isEmpty {
@@ -165,6 +157,22 @@ enum ImageAttachmentLoader {
                 guard let tiff = image.tiffRepresentation, tiff.count <= maxSourceBytes else { continue }
                 results.append(Payload(name: "screenshot.png", data: tiff))
             }
+        }
+        return results
+    }
+
+    /// Read image files the user picked, dropped or copied, refusing empty and
+    /// oversized ones before loading them.
+    static func payloads(fromFiles urls: [URL]) -> [Payload] {
+        var results: [Payload] = []
+        for url in urls.prefix(maxPerMessage) {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            guard size > 0, size <= maxSourceBytes else {
+                logger.warning("Image file rejected: \(size, privacy: .public) bytes")
+                continue
+            }
+            guard let data = try? Data(contentsOf: url) else { continue }
+            results.append(Payload(name: url.lastPathComponent, data: data))
         }
         return results
     }
@@ -262,6 +270,53 @@ enum ImageAttachmentLoader {
             try? FileManager.default.removeItem(at: scratch)
             completion(payloads)
         }
+    }
+
+    /// Take the images out of a drop, for any drop target (the notch wing, the
+    /// panel). Returns whether the drop was accepted; `deliver` runs on the main
+    /// queue with the bytes, either right away or once a promised file (a
+    /// screenshot dragged from its corner thumbnail) has been written — then
+    /// possibly with none, if the file turned out unusable.
+    static func receiveDrop(
+        from pasteboard: NSPasteboard,
+        deliver: @escaping ([Payload]) -> Void
+    ) -> Bool {
+        // The drag pasteboard dies with the drop call, so copy the bytes out
+        // now and do the decoding, shrinking and text recognition afterwards.
+        let payloads = payloads(from: pasteboard)
+        if !payloads.isEmpty {
+            deliver(payloads)
+            return true
+        }
+        let receivers = promiseReceivers(from: pasteboard)
+        guard !receivers.isEmpty else {
+            logger.warning("Drop contained no usable image")
+            return false
+        }
+        // The target view may be gone before the promised file arrives; the
+        // image must still be attached, so nothing here is captured weakly.
+        // An empty delivery still goes through so the user is told it failed.
+        fulfill(receivers) { payloads in
+            if payloads.isEmpty { logger.warning("Promised drop delivered no usable image") }
+            deliver(payloads)
+        }
+        return true
+    }
+
+    /// Whether ⌘V should attach an image rather than paste text.
+    ///
+    /// A copied image file (Finder), a screenshot copied with ⌃⇧⌘4, or a
+    /// browser's Copy Image is an image. Copied text from Word or Pages often
+    /// carries a picture of itself too; that stays a text paste.
+    static func pasteIsImage(_ pasteboard: NSPasteboard) -> Bool {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true,
+            .urlReadingContentsConformToTypes: [UTType.image.identifier],
+        ]
+        if pasteboard.canReadObject(forClasses: [NSURL.self], options: options) { return true }
+        guard pasteboard.availableType(from: [.string, .rtf]) == nil else { return false }
+        return pasteboard.availableType(from: rawTypes) != nil
+            || pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
     }
 
     /// Delete the stored file for an attachment the user removed.

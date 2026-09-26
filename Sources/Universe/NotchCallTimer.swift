@@ -60,7 +60,7 @@ enum NotchCallTimer {
     /// Show the waveform wing joined to the right side of the notch.
     static func show() {
         guard !isVisible else { return }
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.notchScreen else { return }
 
         logger.info("Showing call waveform wing")
         isVisible = true
@@ -384,7 +384,7 @@ enum NotchCallTimer {
     // MARK: - Positioning
 
     private static func reposition() {
-        guard isVisible, let panel, let screen = NSScreen.main else { return }
+        guard isVisible, let panel, let screen = NSScreen.notchScreen else { return }
         let notchSize = screen.notchSize
         let screenFrame = screen.frame
         let windowWidth = wingWidth

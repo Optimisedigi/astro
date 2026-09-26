@@ -100,7 +100,7 @@ enum NotchCallButton {
     /// Show the call button joined to the notch.
     static func show() {
         guard !isVisible else { return }
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.notchScreen else { return }
 
         logger.info("Showing call button")
         isVisible = true
@@ -188,7 +188,7 @@ enum NotchCallButton {
         let labelHeight: CGFloat = 18
         let labelY = (wingHeight - labelHeight) / 2
 
-        let pencil = makeSymbolLabel("pencil", description: "Write a diary entry")
+        let pencil = makeSymbolLabel("pencil", description: "Write a journal entry")
         pencil.frame = NSRect(
             x: iconLeftPadding,
             y: labelY,
@@ -456,6 +456,15 @@ enum NotchCallButton {
         callSession = session
         LiveVoiceState.shared.setActive(!(session is CallSession))
         session.start()
+        // Pictures waiting in the panel are what this call is likely about.
+        // A voice that can't see them just leaves them staged, without a warning.
+        PanelController.shared.chatState.shareStagedImagesWithCall(explainRefusal: false)
+    }
+
+    /// Hand pictures to the running call's voice. False when there is no call
+    /// or its voice cannot see images.
+    static func shareImagesWithCall(_ images: [ImageAttachment]) -> Bool {
+        callSession?.share(images: images) ?? false
     }
 
     /// Start a live call from the panel (shortcut or mic button). No greeting:
@@ -469,8 +478,10 @@ enum NotchCallButton {
     }
 
     /// End a call — revert icon to white phone, hide the timer wing, and stop the voice session.
-    static func endCall() {
-        logger.info("Call ended")
+    /// Logs where the hang-up came from: many paths end calls, and an unexpected
+    /// one is otherwise impossible to tell apart in the log.
+    static func endCall(file: StaticString = #fileID, line: UInt = #line) {
+        logger.info("Call ended by \("\(file):\(line)", privacy: .public)")
         isInCall = false
         isHiddenByOverlay = false
         updateLabel(disconnect: false)
@@ -601,7 +612,7 @@ enum NotchCallButton {
     // MARK: - Positioning
 
     private static func reposition() {
-        guard isVisible, let panel, let screen = NSScreen.main else { return }
+        guard isVisible, let panel, let screen = NSScreen.notchScreen else { return }
         let notchSize = screen.notchSize
         let screenFrame = screen.frame
         let windowHeight = notchSize.height
@@ -816,43 +827,10 @@ final class CallButtonOverlay: NSView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         NotchCallButton.setDropHighlight(false)
-        // The drag pasteboard dies with this call, so copy the bytes out now and
-        // do the decoding, shrinking and text recognition afterwards.
-        let payloads = ImageAttachmentLoader.payloads(from: sender.draggingPasteboard)
-        if !payloads.isEmpty {
-            CallButtonOverlay.stage(payloads)
-            return true
-        }
-
-        // Nothing readable yet: this is a promised file, which is how a
-        // screenshot dragged from its corner thumbnail arrives. The sender
-        // writes it for us, then we attach it.
-        let receivers = ImageAttachmentLoader.promiseReceivers(from: sender.draggingPasteboard)
-        guard !receivers.isEmpty else {
-            logger.warning("Drop contained no usable image")
-            return false
-        }
-        // Not captured weakly on purpose: the wing can collapse (and this view
-        // go away) between the drop and the promised file arriving, and the
-        // image must still be attached.
-        ImageAttachmentLoader.fulfill(receivers) { payloads in
-            guard !payloads.isEmpty else {
-                logger.warning("Promised drop delivered no usable image")
-                return
-            }
-            CallButtonOverlay.stage(payloads)
-        }
-        return true
-    }
-
-    private static func stage(_ payloads: [ImageAttachmentLoader.Payload]) {
-        Task { @MainActor in
-            let attachments = await ImageAttachmentLoader.attachments(from: payloads)
-            guard !attachments.isEmpty else {
-                logger.warning("Drop contained no usable image")
-                return
-            }
-            PanelController.shared.openWithAttachments(attachments)
+        // Promised files (a screenshot dragged from its corner thumbnail) can
+        // arrive after the wing has collapsed; the panel still gets them.
+        return ImageAttachmentLoader.receiveDrop(from: sender.draggingPasteboard) { payloads in
+            PanelController.shared.openWithAttachments(payloads)
         }
     }
 }

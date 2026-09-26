@@ -124,7 +124,10 @@ final class VoiceService: ObservableObject {
     /// True when speech recognition and the microphone are both already granted,
     /// so listening can resume silently on launch without raising a prompt.
     static var isAlreadyAuthorized: Bool {
-        SFSpeechRecognizer.authorizationStatus() == .authorized
+        // Archive self-tests launch as a CLI, not a normal privacy-bearing app.
+        // Even querying Speech authorization can make TCC abort that process.
+        guard !CommandLine.arguments.contains("--selftest") else { return false }
+        return SFSpeechRecognizer.authorizationStatus() == .authorized
             && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 

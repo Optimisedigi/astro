@@ -18,6 +18,14 @@ enum VoiceEngine: String, CaseIterable, Identifiable {
 protocol VoiceCallSession: AnyObject {
     func start()
     func end()
+    /// Show pictures to the voice mid-call so the user can talk about them.
+    /// False when this voice cannot see images; the caller keeps them.
+    func share(images: [ImageAttachment]) -> Bool
+}
+
+extension VoiceCallSession {
+    /// The built-in voice cannot see images; both OpenAI live voices override this.
+    func share(images: [ImageAttachment]) -> Bool { false }
 }
 
 extension CallSession: VoiceCallSession {}
@@ -32,6 +40,15 @@ final class LiveVoiceState: ObservableObject {
     /// The conversation so far, in order, updated as words stream in. The panel
     /// shows it during the call; it is saved as a "Voice Call" chat at the end.
     @Published var transcript: [Session.Message] = []
+    @Published private(set) var imageGenerationIDs: Set<String> = []
+    var isGeneratingImage: Bool { !imageGenerationIDs.isEmpty }
+    var imageToolRuns: [ToolRun] {
+        isGeneratingImage ? [ToolRun(id: "voice-image", name: "generate_image", detail: nil)] : []
+    }
+
+    func imageGenerationStarted(id: String) { imageGenerationIDs.insert(id) }
+    func imageGenerationFinished(id: String) { imageGenerationIDs.remove(id) }
+
     /// What the user is saying right now, shown in the "Ask anything" box as if
     /// typed. Moves to `transcript` when the turn's final text arrives.
     @Published private(set) var draft = ""
@@ -44,6 +61,7 @@ final class LiveVoiceState: ObservableObject {
 
     func setActive(_ active: Bool) {
         isActive = active
+        imageGenerationIDs = []
         if active { transcript = [] }
         if !active { inputLevel = 0 }
         draft = ""

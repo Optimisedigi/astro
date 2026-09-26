@@ -112,6 +112,12 @@ final class ScheduleStore: ObservableObject {
     }
 
     private func deliver(_ job: Job) {
+        // The archived app has a bundle ID too. Self-tests must record delivery
+        // instead of displaying notifications or starting a real routine.
+        if CommandLine.arguments.contains("--selftest") {
+            deliveredWithoutBundle.append(job.name)
+            return
+        }
         switch job.kind {
         case .reminder:
             // Notch toast like Tama, with the system notification as the fallback

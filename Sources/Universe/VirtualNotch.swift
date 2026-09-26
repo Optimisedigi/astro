@@ -29,7 +29,7 @@ enum VirtualNotch {
     /// Show the virtual notch at the top of the main screen.
     static func show() {
         guard !isVisible else { return }
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.notchScreen else { return }
 
         logger.info("Showing virtual notch")
         isVisible = true
@@ -161,7 +161,7 @@ enum VirtualNotch {
     // MARK: - Positioning
 
     private static func reposition() {
-        guard isVisible, let panel, let shapeLayer, let screen = NSScreen.main else { return }
+        guard isVisible, let panel, let shapeLayer, let screen = NSScreen.notchScreen else { return }
         let notchSize = screen.exactNotchSize
         let screenFrame = screen.frame
         let originX = screenFrame.midX - notchSize.width / 2

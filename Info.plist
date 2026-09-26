@@ -29,7 +29,9 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Astro needs microphone access for speech recognition when you hold ⌥Space to speak.</string>
+	<string>Astro uses your microphone for voice conversations and journal dictation.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Astro uses automation to carry out actions you request in other apps.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Astro uses speech recognition to transcribe your voice commands.</string>
 </dict>

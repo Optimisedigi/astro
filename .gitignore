@@ -4,3 +4,15 @@ Universe.xcodeproj/
 
 # Agent scratch (uploads, plans, session state)
 .gg/
+
+# Local release output and signing credentials (never commit private keys)
+__pycache__/
+*.xcarchive/
+*.dmg
+*.p12
+*.p8
+*.mobileprovision
+*.provisionprofile
+.env
+.env.*
+!.env.example

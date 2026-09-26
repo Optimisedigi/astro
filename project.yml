@@ -8,7 +8,7 @@ packages:
     path: Vendor/ThinkingOrbsKit
   kokoro-ios:
     url: https://github.com/mlalma/kokoro-ios.git
-    from: "1.0.11"
+    exactVersion: "1.0.11"
   mlx-swift:
     url: https://github.com/ml-explore/mlx-swift
     exactVersion: "0.30.2"
@@ -30,6 +30,9 @@ settings:
     INFOPLIST_FILE: Info.plist
     CODE_SIGN_ENTITLEMENTS: Universe.entitlements
     SWIFT_VERSION: "5.0"
+  configs:
+    Release:
+      ENABLE_HARDENED_RUNTIME: YES
 targets:
   Universe:
     type: application
@@ -41,6 +44,9 @@ targets:
       - path: Resources/notification.mp3
         buildPhase: resources
       - path: Resources/AppIcon.icns
+        buildPhase: resources
+      - path: Release/Licenses
+        type: folder
         buildPhase: resources
     dependencies:
       - package: ThinkingOrbsKit

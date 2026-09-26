@@ -274,7 +274,7 @@ enum CodexRequestBuilder {
     // MARK: - Tool Conversion
 
     /// Convert Anthropic tool definitions to Codex function format.
-    private static func convertTools(_ tools: [[String: Any]]) -> [[String: Any]] {
+    static func convertTools(_ tools: [[String: Any]]) -> [[String: Any]] {
         tools.compactMap { tool -> [String: Any]? in
             guard let name = tool["name"] as? String else { return nil }
 

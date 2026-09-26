@@ -48,6 +48,11 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
     private var playingItemReceivedMs = 0
     private var playingItemStartedAt: CFAbsoluteTime?
     private var suspendedChatVoiceMode = false
+    /// The socket is up and the mic is live, so conversation items can go out.
+    private var isConnected = false
+    /// Pictures shared while still connecting; sent as soon as the call is up,
+    /// or handed back to the panel if it never connects.
+    private var queuedImages: [ImageAttachment] = []
 
     /// Notch calls open with a spoken greeting, like a phone call. Calls
     /// started by opening the panel skip it: the user is about to talk.
@@ -100,6 +105,12 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
     func end() {
         guard isActive else { return }
         isActive = false
+        isConnected = false
+        if !queuedImages.isEmpty {
+            // The voice never saw them: back to the panel, ready to type about.
+            PanelController.shared.chatState.restoreStagedImages(queuedImages)
+            queuedImages = []
+        }
         logger.info("━━━ REALTIME CALL END ━━━")
         connectTask?.cancel()
         connectTask = nil
@@ -151,7 +162,14 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
 
             try await audioReady?.value
             guard isActive else { return }
-            if greets {
+            isConnected = true
+            let queued = queuedImages
+            queuedImages = []
+            if !queued.isEmpty, deliver(queued) {
+                // Pictures shared while connecting open the call instead of a
+                // greeting: the user started it to talk about them.
+                acknowledgeImages()
+            } else if greets {
                 // The model speaks first so the call opens like a real phone call.
                 turns.responseRequested()
                 send(["type": "response.create", "response": [
@@ -334,6 +352,64 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
         }
     }
 
+    // MARK: - Images
+
+    func share(images: [ImageAttachment]) -> Bool {
+        guard isActive, !images.isEmpty else { return false }
+        guard isConnected else {
+            queuedImages += images
+            return true
+        }
+        guard deliver(images) else { return false }
+        acknowledgeImages()
+        return true
+    }
+
+    /// Send the pictures to the voice, then show them in the call's
+    /// conversation (which saves them with it). False if none could be read.
+    private func deliver(_ images: [ImageAttachment]) -> Bool {
+        guard let item = Self.imageItem(images) else {
+            logger.error("Shared image(s) could not be read")
+            return false
+        }
+        send(item)
+        transcript.appendSharedImages(images)
+        publishTranscript()
+        logger.info("Shared \(images.count) image(s) with the call")
+        return true
+    }
+
+    /// The voice says what it sees, so the user knows the picture arrived.
+    /// Skipped while it is mid-reply or running a tool: only one response may
+    /// run at a time, and the picture is in the conversation for its next turn.
+    private func acknowledgeImages() {
+        guard !turns.responseActive, turns.pendingTools == 0 else { return }
+        turns.responseRequested()
+        send(["type": "response.create", "response": ["instructions": Self.imageAcknowledgement]])
+    }
+
+    /// Replaces the session instructions for this one reply, so it restates
+    /// the few rules that matter.
+    nonisolated static let imageAcknowledgement = """
+        You are Astro, speaking out loud on a live call. The user just shared an image with you. \
+        In one or two short sentences, say what it shows, then ask what they'd like to know about it. \
+        Summarise any text in it rather than reading it all out.
+        """
+
+    /// The pictures as one user message. Nil when none of their files can be read.
+    nonisolated static func imageItem(_ images: [ImageAttachment]) -> [String: Any]? {
+        let parts: [[String: Any]] = images.compactMap { image in
+            guard let base64 = image.base64() else { return nil }
+            return ["type": "input_image", "image_url": "data:\(image.mediaType);base64,\(base64)"]
+        }
+        guard !parts.isEmpty else { return nil }
+        let note = parts.count == 1 ? "I've shared this image with you." : "I've shared these images with you."
+        return ["type": "conversation.item.create", "item": [
+            "type": "message", "role": "user",
+            "content": parts + [["type": "input_text", "text": note]],
+        ] as [String: Any]]
+    }
+
     // MARK: - Tools
 
     private func runTool(callId: String, name: String, arguments: String) {
@@ -357,14 +433,17 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
         turns.toolStarted()
         runningTools += 1
-        NotchActivityIndicator.addProcess(id: "call-agent", label: ToolIndicatorView.displayName(for: name))
+        if name == "generate_image" { LiveVoiceState.shared.imageGenerationStarted(id: callId) }
+        NotchActivityIndicator.addProcess(id: "call-agent",
+                                          label: name == "generate_image" ? "Nebulising..." : ToolIndicatorView.displayName(for: name))
 
         Task { @MainActor [weak self] in
             guard let self else { return }
             let result = await registry.run(name: name, input: input, workingDirectory: workspace)
+            LiveVoiceState.shared.imageGenerationFinished(id: callId)
             runningTools -= 1
-            if runningTools == 0 { NotchActivityIndicator.removeProcess(id: "call-agent") }
             guard isActive else { return }
+            if runningTools == 0 { NotchActivityIndicator.removeProcess(id: "call-agent") }
             sendToolOutput(callId: callId, output: Self.truncate(result), continueResponse: true)
         }
     }
@@ -421,13 +500,15 @@ final class OpenAIRealtimeCallSession: VoiceCallSession {
         NotchCallButton.endCall()
     }
 
+    /// Saved straight to Chats so shared pictures stay with the conversation.
     private func saveSession() {
-        guard var session = chatSession else { return }
-        session.messages = transcript.messages.compactMap { ChatMessage.fromAPIFormat($0) }
-        guard !session.messages.isEmpty else { return }
-        session.updatedAt = Date()
-        chatSession = session
-        SessionStore.shared.save(session: session)
+        guard let chatSession else { return }
+        let messages = transcript.savedMessages
+        guard !messages.isEmpty else { return }
+        var saved = Session(id: chatSession.id, title: chatSession.title, messages: messages)
+        saved.createdAt = chatSession.createdAt
+        saved.updatedAt = Date()
+        SessionStore.shared.save(saved)
     }
 
     // MARK: - Pure builders (unit-testable)
@@ -517,6 +598,10 @@ struct RealtimeTranscript {
         /// A user turn is shown in the conversation only once its final text is
         /// in; until then its words live in the "Ask anything" box.
         var isFinal = false
+        /// Pictures the user shared during the call.
+        var attachments: [ImageAttachment] = []
+
+        var isEmpty: Bool { text.isEmpty && attachments.isEmpty }
     }
 
     private var entries: [Entry] = []
@@ -571,13 +656,27 @@ struct RealtimeTranscript {
         openAssistant = nil
     }
 
+    /// Pictures the user shared, as their own turn in the conversation.
+    mutating func appendSharedImages(_ images: [ImageAttachment]) {
+        entries.append(Entry(itemId: nil, role: "user", text: "", isFinal: true, attachments: images))
+    }
+
     mutating func appendAssistant(_ text: String) {
         appendAssistantDelta(text)
         finishAssistant()
     }
 
+    /// The spoken words only, in API shape.
     var messages: [[String: Any]] {
         entries.filter { !$0.text.isEmpty }.map { ["role": $0.role, "content": $0.text] }
+    }
+
+    /// The call as it is saved to Chats, pictures included.
+    var savedMessages: [Session.Message] {
+        entries.filter { !$0.isEmpty }.map { entry in
+            Session.Message(role: entry.role, text: entry.text,
+                            attachments: entry.attachments.isEmpty ? nil : entry.attachments)
+        }
     }
 
     /// What the conversation area shows during the call, with ids stable
@@ -585,8 +684,9 @@ struct RealtimeTranscript {
     var displayLines: [Session.Message] {
         entries.compactMap { entry in
             let text = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty, entry.role != "user" || entry.isFinal else { return nil }
-            return Session.Message(id: entry.id, role: entry.role, text: text)
+            guard !text.isEmpty || !entry.attachments.isEmpty, entry.role != "user" || entry.isFinal else { return nil }
+            return Session.Message(id: entry.id, role: entry.role, text: text,
+                                   attachments: entry.attachments.isEmpty ? nil : entry.attachments)
         }
     }
 }

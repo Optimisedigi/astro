@@ -52,7 +52,6 @@ struct AgentLoop {
             var assistantBlocks: [[String: Any]] = []
             var pendingTools: [(id: String, name: String, input: [String: Any])] = []
             var textBuffer = ""
-            var stopReason = ""
 
             for try await event in streamProvider(messages, registry.schemas) {
                 switch event {
@@ -61,8 +60,8 @@ struct AgentLoop {
                     await onText(delta)
                 case .toolUse(let id, let name, let input):
                     pendingTools.append((id, name, input))
-                case .stop(let reason):
-                    stopReason = reason
+                case .stop:
+                    continue
                 }
             }
 
@@ -70,7 +69,10 @@ struct AgentLoop {
                 assistantBlocks.append(["type": "text", "text": textBuffer])
             }
 
-            if pendingTools.isEmpty || stopReason == "end_turn" {
+            // Any tool call is answered, whatever stop reason the provider
+            // reports: breaking on "end_turn" silently dropped OpenAI's tool
+            // calls (the knowledge library among them).
+            if pendingTools.isEmpty {
                 break
             }
 

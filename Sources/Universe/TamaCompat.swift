@@ -145,6 +145,7 @@ extension ModelRegistry {
 
 extension ToolIndicatorView {
     static func displayName(for toolName: String, args: [String: String]? = nil) -> String {
+        if toolName == "generate_image" { return "Nebulising..." }
         if let args, let path = args["file_path"] ?? args["command"] ?? args["pattern"] {
             return "\(toolName) — \(path.prefix(40))"
         }
@@ -199,6 +200,25 @@ extension ToolRegistry {
 
 // MARK: - AgentLoop compatibility (Tama inits with registry, Universe with workspace)
 
+/// The legacy call event omits a tool ID at completion. Preserve the name
+/// from the matching start so call UIs can stop the right progress indicator.
+struct AgentToolEventBridge {
+    private var activeNames: [String: String] = [:]
+
+    mutating func events(for activity: ToolActivity) -> [AgentEvent] {
+        switch activity {
+        case let .started(id, name, detail):
+            activeNames[id] = name
+            var events: [AgentEvent] = [.toolStart(name: name, id: id)]
+            if let detail { events.append(.toolRunning(name: name, args: ["file_path": detail])) }
+            return events
+        case let .finished(id, failed):
+            let name = activeNames.removeValue(forKey: id) ?? ""
+            return [.toolResult(name: name, output: failed ? "error" : "ok")]
+        }
+    }
+}
+
 extension AgentLoop {
     static func withRegistry(_ registry: ToolRegistry) -> AgentLoop {
         AgentLoop(workspace: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
@@ -215,18 +235,13 @@ extension AgentLoop {
         onEvent: @escaping (AgentEvent) -> Void
     ) async throws -> [[String: Any]] {
         var result: [[String: Any]] = messages
+        var bridge = AgentToolEventBridge()
         try await run(
             apiMessages: messages,
             streamProvider: ClaudeService.shared.streamEvents,
             onText: { text in onEvent(.textDelta(text)) },
             onToolActivity: { activity in
-                switch activity {
-                case .started(let id, let name, let detail):
-                    onEvent(.toolStart(name: name, id: id))
-                    if let detail { onEvent(.toolRunning(name: name, args: ["file_path": detail])) }
-                case .finished(let id, let failed):
-                    onEvent(.toolResult(name: "", output: failed ? "error" : "ok"))
-                }
+                for event in bridge.events(for: activity) { onEvent(event) }
             }
         )
         return result

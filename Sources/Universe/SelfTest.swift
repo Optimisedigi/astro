@@ -2,7 +2,10 @@
 import AppKit
 import BorderBeamKit
 import CryptoKit
+import Combine
 import Foundation
+import SwiftUI
+import ThinkingOrbsKit
 
 /// Offline proof that the agent loop executes tools end-to-end (no API key needed).
 /// A scripted fake model requests write → read → bash; the real tools run on disk.
@@ -527,6 +530,10 @@ enum SelfTest {
         let textOnly = ChatState.contentBlocks(for: message, vision: false)
         check(!textOnly.contains { $0["type"] as? String == "image" },
               "a model without vision never receives image bytes")
+        let geminiParts = GeminiRequestBuilder.convertMessages([["role": "user", "content": blocks]])
+            .flatMap { $0["parts"] as? [[String: Any]] ?? [] }
+        check(geminiParts.contains { $0["inlineData"] != nil } && geminiParts.contains { $0["text"] != nil },
+              "image: Gemini receives the picture itself, not only its text")
 
         let fenced = ImageAttachment(
             displayName: "a.png", mediaType: "image/png", path: attachment.path,
@@ -551,6 +558,66 @@ enum SelfTest {
         board.clearContents() // the drop is over; decoding must still work
         let dropped = await ImageAttachmentLoader.attachments(from: payloads)
         check(dropped.count == 1, "a drop still attaches after its pasteboard is gone")
+
+        // Live call: a shared picture reaches GPT Realtime as an image, shows in
+        // the call's conversation, and is saved with the call.
+        if let shared = dropped.first {
+            let item = OpenAIRealtimeCallSession.imageItem([shared])
+            let parts = (item?["item"] as? [String: Any])?["content"] as? [[String: Any]] ?? []
+            check(item?["type"] as? String == "conversation.item.create"
+                    && parts.contains { ($0["image_url"] as? String)?.hasPrefix("data:\(shared.mediaType);base64,") == true },
+                  "live call: a shared image goes to the voice as a picture")
+            var unreadable = shared
+            unreadable.path = "/nonexistent/\(UUID().uuidString).png"
+            check(OpenAIRealtimeCallSession.imageItem([unreadable]) == nil, "live call: an unreadable image is not sent")
+
+            var call = RealtimeTranscript()
+            call.appendAssistant("Hi.")
+            call.appendSharedImages([shared])
+            check(call.displayLines.last?.role == "user" && call.displayLines.last?.attachments?.count == 1,
+                  "live call: the shared image shows in the call's conversation")
+            check(call.savedMessages.last?.attachments?.first?.id == shared.id,
+                  "live call: the saved call keeps the image")
+
+            check(call.messages.map { $0["content"] as? String } == ["Hi."],
+                  "live call: the spoken-words list is unchanged by a shared image")
+
+            // GPT‑Live 1 can't see, so the picture goes to the agent it hands
+            // questions to: as an image when that model can see, else its text.
+            let seeing = GPTLiveCallSession.sharedImagesTurn([shared], vision: true)
+            let seeingTypes = (seeing.api["content"] as? [[String: Any]] ?? []).compactMap { $0["type"] as? String }
+            check(seeing.api["role"] as? String == "user" && seeingTypes.contains("image")
+                    && seeing.line.attachments?.first?.id == shared.id,
+                  "GPT-Live: a shared image joins the history its agent gets, and the call's conversation")
+            let blindTurn = GPTLiveCallSession.sharedImagesTurn([shared], vision: false)
+            check(!((blindTurn.api["content"] as? [[String: Any]] ?? []).contains { $0["type"] as? String == "image" }),
+                  "GPT-Live: an agent model that can't see gets the image's text instead")
+            check(GPTLiveProtocol.instructions.contains("delegate any question about an image"),
+                  "GPT-Live: it is told to hand image questions to Astro")
+
+            check(!CallSession().share(images: [shared]), "live call: the built-in voice turns images down")
+            check(!GPTLiveCallSession(voice: "cove").share(images: [shared])
+                    && !OpenAIRealtimeCallSession(model: "gpt-realtime-2.1", voice: "marin").share(images: [shared]),
+                  "live call: nothing is shared before the call starts")
+            let noCall = ChatState()
+            noCall.pendingAttachments = [shared]
+            noCall.shareStagedImagesWithCall()
+            check(noCall.pendingAttachments.count == 1 && noCall.imageNotice == nil,
+                  "live call: without a call, images wait for the next message")
+
+            // A call that ends before connecting hands its pictures back.
+            var other = shared
+            other.id = UUID()
+            let restore = ChatState()
+            restore.pendingAttachments = [other, shared]
+            restore.restoreStagedImages([shared])
+            check(restore.pendingAttachments.map(\.id) == [other.id, shared.id],
+                  "live call: returned images are not duplicated")
+            restore.pendingAttachments = [other]
+            restore.restoreStagedImages([shared])
+            check(restore.pendingAttachments.map(\.id) == [shared.id, other.id],
+                  "live call: images a call never sent come back to the panel")
+        }
         for attachment in dropped { ImageAttachmentLoader.discard(attachment) }
 
         // Drive the real notch-wing view, so the drop wiring itself is exercised
@@ -599,6 +666,113 @@ enum SelfTest {
               "a non-image keeps being refused as it moves over the wing")
         check(!overlay.performDragOperation(FakeDrag(board: textBoard)),
               "dropping a non-image on the wing is rejected")
+
+        checkWindowDragging(check)
+
+        // The panel itself takes image drops too, anywhere on it.
+        let panelView = DropHostingView(rootView: SwiftUI.Text("x"))
+        check(panelView.registeredDraggedTypes.contains(.png)
+                && panelView.registeredDraggedTypes.contains(.fileURL),
+              "panel: the chat panel is registered for image drags")
+        var droppedPayloads: [ImageAttachmentLoader.Payload] = []
+        panelView.onDropImages = { droppedPayloads = $0 }
+        check(panelView.draggingEntered(FakeDrag(board: imageBoard)) == .copy
+                && panelView.draggingUpdated(FakeDrag(board: imageBoard)) == .copy,
+              "panel: dragging an image over the panel offers a copy")
+        check(panelView.performDragOperation(FakeDrag(board: imageBoard)) && droppedPayloads.count == 1,
+              "panel: dropping an image hands its bytes over")
+        check(panelView.draggingEntered(FakeDrag(board: textBoard)) == []
+                && !panelView.performDragOperation(FakeDrag(board: textBoard)),
+              "panel: dropping text is refused")
+
+        // ⌘V attaches an image, but leaves ordinary text pastes alone.
+        check(ImageAttachmentLoader.pasteIsImage(imageBoard), "paste: a copied picture counts as an image")
+        check(!ImageAttachmentLoader.pasteIsImage(textBoard), "paste: copied text is pasted as text")
+        let richText = NSPasteboard(name: .init("universe-selftest-paste-rich"))
+        richText.clearContents()
+        richText.setString("a paragraph", forType: .string)
+        richText.setData(png, forType: .png)
+        check(!ImageAttachmentLoader.pasteIsImage(richText),
+              "paste: text copied with a picture of itself still pastes as text")
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("universe-selftest-\(UUID().uuidString).png")
+        try? png.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let fileBoard = NSPasteboard(name: .init("universe-selftest-paste-file"))
+        fileBoard.clearContents()
+        fileBoard.writeObjects([file as NSURL])
+        check(ImageAttachmentLoader.pasteIsImage(fileBoard), "paste: an image file copied in Finder counts")
+        check(ImageAttachmentLoader.payloads(fromFiles: [file]).count == 1,
+              "image file: an image file is read")
+        let cmdV = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+                                    timestamp: 0, windowNumber: 0, context: nil,
+                                    characters: "v", charactersIgnoringModifiers: "v",
+                                    isARepeat: false, keyCode: 9)!
+        let plainV = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                      timestamp: 0, windowNumber: 0, context: nil,
+                                      characters: "v", charactersIgnoringModifiers: "v",
+                                      isARepeat: false, keyCode: 9)!
+        check(FloatingPanel.isPaste(cmdV) && !FloatingPanel.isPaste(plainV), "paste: ⌘V is recognised, plain v is not")
+
+        // An arriving image is staged and the cursor goes to the question field.
+        let imageState = ChatState()
+        let focusBefore = imageState.composerFocusToken
+        let staged = await ImageAttachmentLoader.attachments(from: payloads)
+        imageState.attach(staged)
+        check(imageState.pendingAttachments.count == 1, "image: an arriving image is staged")
+        check(imageState.composerFocusToken != focusBefore, "image: the cursor goes to the question field")
+
+        // Retrying a failed message keeps images staged for the next one.
+        imageState.session.messages = [.init(role: "user", text: "")]
+        let stagedIDs = imageState.pendingAttachments.map(\.id)
+        imageState.retryLastMessage()
+        check(imageState.pendingAttachments.map(\.id) == stagedIDs,
+              "image: retrying the last message keeps the staged images")
+        for attachment in imageState.pendingAttachments { imageState.removeAttachment(attachment) }
+
+        // An image that can't be used says so instead of vanishing.
+        await imageState.loadImages([.init(name: "broken.png", data: Data("not an image".utf8))])
+        check(imageState.pendingAttachments.isEmpty && imageState.imageNotice != nil
+                && imageState.imagesBeingRead == 0,
+              "image: a broken image shows a notice and nothing is attached")
+        await imageState.loadImages(payloads)
+        check(imageState.imageNotice == nil && imageState.pendingAttachments.count == 1,
+              "image: the next good image clears the notice")
+        for attachment in imageState.pendingAttachments { imageState.removeAttachment(attachment) }
+
+        // The real question box is a SwiftUI TextField. Giving it the cursor in
+        // the panel must not crash: SwiftUI insists on its own text editor, and
+        // a custom one aborted the app every time the panel opened.
+        let swiftUIField = DropHostingView(rootView:
+            SwiftUI.TextField("Ask", text: .constant(""), axis: .vertical)
+                .background(WindowDragHandle())
+        )
+        let fieldWindow = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 80),
+                                        contentView: swiftUIField)
+        // Closed when the check ends, so no stray panel lingers for the rest of
+        // the run. Not released on close: Swift owns this window, not AppKit.
+        fieldWindow.isReleasedWhenClosed = false
+        defer { fieldWindow.close() }
+        swiftUIField.layoutSubtreeIfNeeded()
+        check(swiftUIField.gestureRecognizers.contains { $0 is NSPanGestureRecognizer },
+              "window drag: the SwiftUI input installs its drag recognizer on the hosting view")
+        func firstTextField(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField { return field }
+            return view.subviews.lazy.compactMap(firstTextField(in:)).first
+        }
+        if let field = firstTextField(in: swiftUIField) {
+            let focused = fieldWindow.makeFirstResponder(field)
+            check(focused && field.currentEditor() != nil,
+                  "panel: the SwiftUI question box takes the cursor without crashing")
+            // Images dropped on the box must reach the panel, not the box.
+            let editorTypes = Set((field.currentEditor() as? NSTextView)?.registeredDraggedTypes ?? [])
+            let imageTypes = Set(ImageAttachmentLoader.draggedTypes + [.init("NSFilenamesPboardType"), .URL])
+            check(editorTypes.isDisjoint(with: imageTypes) && editorTypes.contains(.string),
+                  "panel: the question box leaves image drops to the panel and still takes dragged text")
+            fieldWindow.makeFirstResponder(nil)
+        } else {
+            check(false, "panel: the SwiftUI question box is found in the panel")
+        }
     }
 
     /// Paste a path into Ask anything and press Enter — Finder, not the model.
@@ -742,6 +916,14 @@ enum SelfTest {
             check(size.width > 0 && size.height > 0, "notch: notchSize positive on this display")
             check(screen.notchFrame.midX == screen.frame.midX, "notch: frame is centered")
         }
+
+        // The notch bar goes to the main display (the one with the menu bar),
+        // not whichever screen happens to be in use or has a hardware notch.
+        check(NSScreen.notchScreen(from: []) == nil, "notch: no screens means no notch screen")
+        let notchDisplay = NSScreen.notchScreen?
+            .deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+        check(notchDisplay == CGMainDisplayID(),
+              "notch: the bar sits on the main display (the one with the menu bar)")
 
         // Overlay tracker: active on first show, inactive only after debounce.
         NotchOverlayTracker.overlayDidShow()
@@ -976,10 +1158,13 @@ enum SelfTest {
 
         // Permissions: every row must map to a real Settings pane and describe itself.
         let checker = PermissionsChecker()
-        // UNUserNotificationCenter.notificationSettings() hangs in a CLI --selftest.
-        if !CommandLine.arguments.contains("--selftest") {
-            await checker.refresh()
-        }
+        // Self-tests must not query TCC or notification services, even when
+        // launched from inside the archived .app bundle.
+        check(!VoiceService.isAlreadyAuthorized,
+              "voice: selftests do not probe live speech or microphone authorization")
+        await checker.refresh()
+        check(checker.permissions.allSatisfy { $0.status == .unknown } && !checker.isRefreshing,
+              "permissions: selftests do not query live privacy permissions")
         check(checker.permissions.count == PermissionsChecker.Kind.allCases.count, "permissions: every kind has a row")
         check(checker.permissions.allSatisfy { !$0.title.isEmpty && !$0.reason.isEmpty },
               "permissions: every row explains itself")
@@ -1026,9 +1211,14 @@ enum SelfTest {
         // Shortcut-open must re-claim the composer so Cmd+V pastes without a click.
         let focusState = ChatState()
         let beforeFocus = focusState.composerFocusToken
+        // Exercise focus without launching a live call or requesting speech
+        // permission when this self-test runs from a bundled archive.
+        focusState.openForTypingOnly = true
         focusState.panelDidOpen()
-        check(focusState.composerFocusToken == beforeFocus &+ 1,
-              "panel: opening bumps composer focus so paste lands in the field")
+        // Opening bumps once; the switch into typing mode explicitly focuses again.
+        check(focusState.composerFocusToken == beforeFocus &+ 2
+                && focusState.isTypingOnly && !focusState.voice.isListening && !NotchCallButton.isInCall,
+              "panel: opening for typing focuses the field without starting voice")
         focusState.panelDidClose()
 
         // ⇧⌥Space and the notch keyboard open for typing: the mic stays off and
@@ -1052,14 +1242,16 @@ enum SelfTest {
         check(!typingState.isTypingOnly, "typing: closing the panel ends typing mode")
         typingState.voiceMode = savedVoiceMode
 
-        // ⇧⌥Space and ⌥Space each reach their own action.
+        // ⌥Space, ⇧⌥Space and ⌃⌥I each reach their own action.
         let hotKeys = HotKeyManager()
         var pressed: [String] = []
         hotKeys.onHotKey = { pressed.append("talk") }
         hotKeys.onTypingHotKey = { pressed.append("type") }
+        hotKeys.onImageHotKey = { pressed.append("image") }
         hotKeys.handle(hotKeyID: HotKeyManager.talkHotKeyID)
         hotKeys.handle(hotKeyID: HotKeyManager.typingHotKeyID)
-        check(pressed == ["talk", "type"], "hotkeys: ⌥Space talks, ⇧⌥Space types")
+        hotKeys.handle(hotKeyID: HotKeyManager.imageHotKeyID)
+        check(pressed == ["talk", "type", "image"], "hotkeys: ⌥Space talks, ⇧⌥Space types, ⌃⌥I adds an image")
 
         // The notch wing: pencil, phone, keyboard from left to right.
         check(NotchCallButton.wingAction(atX: 20) == .diary, "notch: the left icon opens the diary")
@@ -1248,6 +1440,16 @@ enum SelfTest {
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
 
+        let damagedDate = Date(timeIntervalSince1970: 946684800)
+        let damagedFile = scratch.appendingPathComponent("\(DiaryStore.key(for: damagedDate)).json")
+        let originalBytes = Data("an unreadable journal page that must be preserved".utf8)
+        do { try originalBytes.write(to: damagedFile) }
+        catch { check(false, "diary: unreadable-page fixture can be written"); return }
+        let damagedStore = DiaryStore(directory: scratch)
+        check(!damagedStore.addEntry("Do not replace the old page", on: damagedDate)
+                && (try? Data(contentsOf: damagedFile)) == originalBytes,
+              "diary: adding to an unreadable day preserves the original file")
+
         let diary = DiaryStore(directory: scratch)
         check(diary.days.isEmpty, "diary: empty store starts with no days")
         check(DiaryStore.defaultDirectory().lastPathComponent == "diary",
@@ -1277,11 +1479,107 @@ enum SelfTest {
         check(reloaded.day(for: today)?.entries.first?.text == "first thing",
               "diary: entry text survives a reload")
 
+        // Existing pages have no marker field. They must decode unchanged;
+        // marking one entry must persist without changing its words or id.
+        let legacyDir = scratch.appendingPathComponent("legacy", isDirectory: true)
+        try? FileManager.default.createDirectory(at: legacyDir, withIntermediateDirectories: true)
+        let legacyID = UUID()
+        let oldPage = """
+            {"date":"2023-10-20","entries":[{"id":"\(legacyID.uuidString)","text":"Keep these words","createdAt":"2023-10-20T12:00:00Z"}]}
+            """
+        try? Data(oldPage.utf8).write(to: legacyDir.appendingPathComponent("2023-10-20.json"))
+        let legacy = DiaryStore(directory: legacyDir)
+        check(legacy.days.first?.entries.first?.text == "Keep these words"
+                && legacy.days.first?.entries.first?.highlight == nil,
+              "journal: old pages without markers still load")
+        legacy.setHighlight(dayKey: "2023-10-20", entryID: legacyID, highlight: .newIdea)
+        let marked = DiaryStore(directory: legacyDir).days.first?.entries.first
+        check(marked?.highlight == .newIdea && marked?.text == "Keep these words" && marked?.id == legacyID,
+              "journal: markers persist without changing an existing entry")
+        legacy.setHighlight(dayKey: "2023-10-20", entryID: legacyID, highlight: nil)
+        check(DiaryStore(directory: legacyDir).days.first?.entries.first?.highlight == nil,
+              "journal: a marker can be cleared")
+        let fixedLegacyDay = ISO8601DateFormatter().date(from: "2023-10-20T12:00:00Z")!
+        let blockedDir = scratch.appendingPathComponent("write-failure", isDirectory: true)
+        try? FileManager.default.createDirectory(at: blockedDir, withIntermediateDirectories: true)
+        let blocked = DiaryStore(directory: blockedDir)
+        check(blocked.addEntry("Keep this", on: fixedLegacyDay), "journal: test page written before write failure")
+        if let entry = blocked.days.first?.entries.first, let key = blocked.days.first?.date {
+            // Remove only this disposable test directory to simulate a failed
+            // save. The in-memory entry must not claim the marker was saved.
+            try? FileManager.default.removeItem(at: blockedDir)
+            check(!blocked.setHighlight(dayKey: key, entryID: entry.id, highlight: .highlight)
+                    && blocked.days.first?.entries.first?.highlight == nil,
+                  "journal: a failed marker write leaves the entry unchanged")
+            check(!blocked.updateEntry(dayKey: key, entryID: entry.id, text: "Formatted.",
+                                       ifUnchangedFrom: entry.text)
+                    && blocked.days.first?.entries.first?.text == entry.text,
+                  "journal: a failed format write leaves the original entry unchanged")
+            let editSaved = blocked.updateEntry(dayKey: key, entryID: entry.id, text: "Unsaved edit")
+            check(!editSaved && blocked.days.first?.entries.first?.text == entry.text,
+                  "journal: a failed manual edit stays visible as unsaved")
+            let deleted = blocked.deleteEntry(dayKey: key, entryID: entry.id)
+            check(!deleted && blocked.days.first?.entries.first?.id == entry.id,
+                  "journal: a failed delete leaves the entry visible")
+        }
+
+        // An entry shows a calendar day, never an elapsed hour count. The
+        // exact words may vary with the user's locale; same-day times may not.
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let noon = ISO8601DateFormatter().date(from: "2023-10-20T12:00:00Z")!
+        let evening = ISO8601DateFormatter().date(from: "2023-10-20T22:00:00Z")!
+        let previous = ISO8601DateFormatter().date(from: "2023-10-19T12:00:00Z")!
+        check(DiaryEntryRow.dayLabel(noon, now: evening, calendar: utc) == DiaryEntryRow.dayLabel(evening, now: evening, calendar: utc)
+                && DiaryEntryRow.dayLabel(noon, now: evening, calendar: utc) != DiaryEntryRow.dayLabel(previous, now: evening, calendar: utc),
+              "journal: entry labels show the day, not the hour")
+        check(!DiaryEntryRow.dayLabel(noon, now: evening, calendar: utc).lowercased().contains("hour"),
+              "journal: entry label never shows elapsed hours")
+
         // Deleting the last entry removes the page rather than leaving it blank.
         if let day = reloaded.day(for: yesterday), let entry = day.entries.first {
             reloaded.deleteEntry(dayKey: day.date, entryID: entry.id)
         }
         check(reloaded.day(for: yesterday) == nil, "diary: emptied day is removed")
+
+        // Live partials replace only the spoken portion, not words typed before
+        // dictation began. A cancelled permission request cannot start capture.
+        var session = JournalDictationSession()
+        let request = session.begin(draft: "Typed first")
+        if let request {
+            check(session.draft(for: "hello", request: request) == "Typed first hello"
+                    && session.draft(for: "hello there", request: request) == "Typed first hello there"
+                    && session.draft(for: "final words", request: request) == "Typed first final words",
+                  "journal: partial and final transcripts preserve typed words without repetition")
+            session.end()
+            check(!session.isCurrent(request) && session.draft(for: "late", request: request) == nil,
+                  "journal: leaving before permission completes invalidates the capture request")
+        } else {
+            check(false, "journal: a fresh dictation request starts")
+        }
+        let second = session.begin(draft: "New draft")
+        check(second != nil && second != request && session.begin(draft: "duplicate") == nil,
+              "journal: stale or duplicate dictation requests cannot take over a new one")
+        session.end()
+
+        // A model response to a saved entry must not replace an edit saved
+        // while it was in flight (or recreate an entry deleted meanwhile).
+        if let day = reloaded.day(for: today), let entry = day.entries.first {
+            reloaded.updateEntry(dayKey: day.date, entryID: entry.id, text: "edited while formatting")
+            check(!reloaded.updateEntry(dayKey: day.date, entryID: entry.id, text: "formatted old words",
+                                        ifUnchangedFrom: entry.text)
+                    && reloaded.day(for: today)?.entries.first?.text == "edited while formatting",
+                  "journal: stale formatting cannot overwrite a saved edit")
+            check(reloaded.updateEntry(dayKey: day.date, entryID: entry.id, text: "Formatted new words.",
+                                       ifUnchangedFrom: "edited while formatting")
+                    && DiaryStore(directory: scratch).day(for: today)?.entries.first?.text == "Formatted new words.",
+                  "journal: formatting the unchanged saved entry persists")
+            reloaded.deleteEntry(dayKey: day.date, entryID: entry.id)
+            check(!reloaded.updateEntry(dayKey: day.date, entryID: entry.id, text: "Late response",
+                                        ifUnchangedFrom: "Formatted new words.")
+                    && reloaded.day(for: today)?.entries.first?.id != entry.id,
+                  "journal: a late format response cannot recreate a deleted entry")
+        }
 
         // Save while dictating tidies, then saves: what ends up stored.
         struct TidyFailed: Error {}
@@ -1372,6 +1670,175 @@ enum SelfTest {
         // The system prompt promises these by name; unregistered, the model cannot call them.
         check(names.isSuperset(of: ["web_search", "web_fetch", "browser", "screenshot", "knowledge_search"]),
               "tools: web, browser, screenshot and knowledge tools are registered")
+
+        // Image generation: registered, asks OpenAI for exactly one picture of
+        // the right shape, and reads the finished image out of the stream.
+        check(names.contains("generate_image"), "image gen: the generate_image tool is registered")
+        let activeImage = ToolRun(id: "image-1", name: "generate_image", detail: nil)
+        check(ToolIndicatorView.displayName(for: "generate_image") == "Nebulising...",
+              "image gen: notch call mode labels image progress instead of a raw tool name")
+        check(activeImage.showsImageOrb && activeImage.progressLabel == "Nebulising...",
+              "image gen: a running image tool shows the working orb and Nebulising label")
+        var finishedImage = activeImage
+        finishedImage.status = .done
+        check(!finishedImage.showsImageOrb && finishedImage.label == "Image created",
+              "image gen: completion replaces the active orb with a finished status")
+        finishedImage.status = .failed
+        check(!finishedImage.showsImageOrb && finishedImage.label == "Image failed",
+              "image gen: failure replaces the active orb with a failed status")
+        let genBody = ImageGenerationTool.requestBody(prompt: "a red circle", shape: .landscape, model: "gpt-6-luna")
+        let genTool = (genBody["tools"] as? [[String: Any]])?.first
+        check(genTool?["type"] as? String == "image_generation" && genTool?["size"] as? String == "1536x1024"
+                && (genBody["tool_choice"] as? [String: Any])?["type"] as? String == "image_generation"
+                && genBody["store"] as? Bool == false
+                && ((genBody["input"] as? [[String: Any]])?.first?["content"] as? String)?.contains("wide landscape") == true,
+              "image gen: the request forces one image and names the chosen shape")
+        let pngBytes = Data([0x89, 0x50, 0x4E, 0x47])
+        let doneEvent = "data: " + (String(data: (try? JSONSerialization.data(withJSONObject: [
+            "type": "response.output_item.done",
+            "item": ["type": "image_generation_call", "result": pngBytes.base64EncodedString()],
+        ])) ?? Data(), encoding: .utf8) ?? "")
+        check((try? ImageGenerationTool.imageData(fromEventLines: ["data: {\"type\":\"response.created\"}", doneEvent])) == pngBytes,
+              "image gen: the finished picture is read from the stream")
+        let refusal = "data: {\"type\":\"error\",\"error\":{\"message\":\"blocked by policy\"}}"
+        do {
+            _ = try ImageGenerationTool.imageData(fromEventLines: [refusal])
+            check(false, "image gen: a refusal is reported with OpenAI's reason")
+        } catch {
+            check(error.localizedDescription.contains("blocked by policy"),
+                  "image gen: a refusal is reported with OpenAI's reason")
+        }
+        check(ImageGenerationTool.fileSafe("../../etc/passwd: a cat!") == "etc passwd a cat"
+                && ImageGenerationTool.fileSafe("///") == "image",
+              "image gen: the saved file name can't steer the path")
+        let pictures = FileManager.default.temporaryDirectory
+            .appendingPathComponent("universe-image-selftest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: pictures) }
+        let imageTime = Date(timeIntervalSince1970: 1_700_000_000)
+        let firstCopy = ImageGenerationTool.saveCopy(pngBytes, prompt: "same prompt", folder: pictures, now: imageTime)
+        let secondCopy = ImageGenerationTool.saveCopy(pngBytes, prompt: "same prompt", folder: pictures, now: imageTime)
+        let savedFiles = (try? FileManager.default.contentsOfDirectory(at: pictures,
+                                                  includingPropertiesForKeys: nil)) ?? []
+        check(firstCopy != nil && secondCopy != nil && firstCopy != secondCopy
+                && firstCopy.flatMap { try? Data(contentsOf: $0) } == pngBytes
+                && secondCopy.flatMap { try? Data(contentsOf: $0) } == pngBytes
+                && savedFiles.count == 2,
+              "image gen: same-second pictures save atomically as separate files")
+        let blockedFolder = pictures.appendingPathComponent("not-a-folder")
+        try? Data("occupied".utf8).write(to: blockedFolder)
+        check(ImageGenerationTool.saveCopy(pngBytes, prompt: "blocked", folder: blockedFolder) == nil,
+              "image gen: a failed file write reports failure rather than crashing")
+        var bridge = AgentToolEventBridge()
+        let started = bridge.events(for: .started(id: "image-1", name: "generate_image", detail: nil))
+        let finished = bridge.events(for: .finished(id: "image-1", failed: false))
+        check(started.contains { if case let .toolStart(name, _) = $0 { return name == "generate_image" }; return false }
+                && finished.contains { if case let .toolResult(name, _) = $0 { return name == "generate_image" }; return false },
+              "image gen: GPT-Live delegation keeps the tool name through start and finish")
+        _ = bridge.events(for: .started(id: "read-1", name: "read", detail: nil))
+        let otherResult = bridge.events(for: .finished(id: "read-1", failed: true))
+        check(otherResult.contains { if case let .toolResult(name, output) = $0 { return name == "read" && output == "error" }; return false },
+              "image gen: another GPT-Live tool keeps its own failure state")
+        let call = LiveVoiceState.makeForTesting()
+        call.setActive(true)
+        var observedImageIDs: [Set<String>] = []
+        let observation = call.$imageGenerationIDs.sink { observedImageIDs.append($0) }
+        call.imageGenerationStarted(id: "one")
+        call.imageGenerationStarted(id: "two")
+        check(call.isGeneratingImage && call.imageToolRuns.first?.showsImageOrb == true
+                && observedImageIDs.last == Set(["one", "two"]),
+              "image gen: a live call publishes the working orb while a picture is being made")
+        let startFrame = orbFrame(state: .working, size: .px64, t: 0)
+        let nextFrame = orbFrame(state: .working, size: .px64, t: 0.7)
+        check(zip(startFrame.dots, nextFrame.dots).contains { abs($0.x - $1.x) > 0.01 || abs($0.y - $1.y) > 0.01 },
+              "image gen: the working orb has different positions as its clock advances")
+        call.imageGenerationFinished(id: "one")
+        check(call.isGeneratingImage, "image gen: a second running call image keeps progress visible")
+        call.setActive(false)
+        check(!call.isGeneratingImage && call.imageToolRuns.isEmpty && observedImageIDs.last?.isEmpty == true,
+              "image gen: hanging up clears image progress even when a tool is still finishing")
+        withExtendedLifetime(observation) {}
+
+        // Made images show in the reply and are recalled in words, never as
+        // image blocks (providers reject those in assistant turns).
+        let madeState = ChatState()
+        let made = ImageAttachment(displayName: "Generated: a red circle", mediaType: "image/png",
+                                   path: "/nonexistent/made.png", text: "", pixelWidth: 1024, pixelHeight: 1024)
+        let askingReply = Session.Message(role: "assistant", text: "")
+        madeState.session.messages = [.init(role: "user", text: "draw a red circle"), askingReply,
+                                      .init(role: "user", text: "thanks"), .init(role: "assistant", text: "")]
+        madeState.appendGeneratedImage(made, toReply: askingReply.id)
+        check(MessageListView.shouldDisplay(madeState.session.messages[1])
+                && !MessageListView.shouldDisplay(.init(role: "assistant", text: "")),
+              "image gen: the finished image appears even before the assistant writes text")
+        check(!ChatState.shouldDiscardOnRetry(madeState.session.messages[1])
+                && ChatState.shouldDiscardOnRetry(.init(role: "assistant", text: "")),
+              "image gen: retry keeps an image-only reply instead of discarding it")
+        check(madeState.session.messages[1].attachments?.first?.id == made.id
+                && madeState.session.messages.last?.attachments == nil,
+              "image gen: a made image goes into the reply that asked for it, not just the latest one")
+
+        // Outside a chat turn (a scheduled routine, a voice call) nothing is
+        // set, so the picture gets its own preview window instead of joining
+        // whichever chat is open; inside one, the chat's own handler is used.
+        check(ImageGenerationTool.deliver == nil, "image gen: routines and calls don't send pictures into a chat")
+        let chatHandler: @MainActor @Sendable (ImageAttachment) -> Void = { _ in }
+        // Match ChatState.send's async TaskLocal scope; the synchronous
+        // overload traps under the optimized macOS 26 Swift runtime.
+        let seenInsideTurn = await ImageGenerationTool.$deliver.withValue(chatHandler) {
+            await Task.yield()
+            return ImageGenerationTool.deliver != nil
+        }
+        check(seenInsideTurn && ImageGenerationTool.deliver == nil,
+              "image gen: a chat turn's picture handler applies only during that turn")
+        let recalled = ChatState.contentBlocks(for: .init(role: "assistant", text: "Here it is.", attachments: [made]), vision: true)
+        check(!recalled.contains { $0["type"] as? String == "image" }
+                && recalled.compactMap { $0["text"] as? String }.contains { $0.contains("You made an image") },
+              "image gen: a made image is recalled in words on the next turn")
+
+        // The knowledge library must reach the model, and be credited.
+        let prompt = ClaudeService.chatSystemPromptForTesting
+        check(prompt.contains("knowledge_search") && prompt.contains("knowledge library"),
+              "knowledge: the chat prompt tells Astro to search the library and credit it")
+        guard let gpt = ModelRegistry.models.first(where: { $0.provider == .openai }) else {
+            check(false, "knowledge: an OpenAI model is listed")
+            return
+        }
+        let history: [[String: Any]] = [
+            ["role": "user", "content": [
+                ["type": "text", "text": "what is in this?"],
+                ["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": "AAAA"]],
+            ]],
+            ["role": "assistant", "content": [
+                ["type": "tool_use", "id": "call_1", "name": "knowledge_search", "input": ["question": "x"]],
+            ]],
+            ["role": "user", "content": [
+                ["type": "tool_result", "tool_use_id": "call_1", "content": "Passages…"],
+            ]],
+        ]
+        let body = ClaudeService.openAIBody(messages: history, tools: ToolRegistry.shared.schemas,
+                                            model: gpt, system: prompt)
+        let sentTools = (body["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
+        check(sentTools.contains("knowledge_search"), "knowledge: OpenAI chat requests carry the library tool")
+        let input = body["input"] as? [[String: Any]] ?? []
+        let types = input.flatMap { item -> [String] in
+            let own = (item["type"] as? String).map { [$0] } ?? []
+            let parts = (item["content"] as? [[String: Any]])?.compactMap { $0["type"] as? String } ?? []
+            return own + parts
+        }
+        check(types.contains("function_call") && types.contains("function_call_output"),
+              "knowledge: OpenAI sees the library call and its results on the next turn")
+        check(types.contains("input_image"), "image: OpenAI receives attached pictures as images")
+        check(body["store"] as? Bool == false,
+              "openai: requests say store=false (the ChatGPT endpoint rejects them otherwise)")
+
+        // A fallback model that cannot see gets a note, not the picture.
+        let blind = ClaudeService.withoutImages(history)
+        let blindTypes = blind.flatMap { ($0["content"] as? [[String: Any]] ?? []).compactMap { $0["type"] as? String } }
+        let blindTexts = blind.flatMap { ($0["content"] as? [[String: Any]] ?? []).compactMap { $0["text"] as? String } }
+        check(!blindTypes.contains("image") && blindTexts.contains("what is in this?")
+                && blindTexts.contains { $0.contains("cannot see images") }
+                && blindTypes.contains("tool_use") && blindTypes.contains("tool_result"),
+              "image: a model without vision gets a note instead of the picture, and the rest is unchanged")
     }
 
     // Schedule parsing + store checks run before UI exists, so they can use ScheduleStore safely.

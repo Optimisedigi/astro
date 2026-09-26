@@ -23,10 +23,14 @@ final class GPTLiveCallSession: VoiceCallSession {
     private var sideband: URLSessionWebSocketTask?
     private var connectTask: Task<Void, Never>?
     private var delegationTask: Task<Void, Never>?
+    private var activeImageID: String?
     private var isActive = false
     private var suspendedChatVoiceMode = false
     private var chatSession: ChatSession?
+    /// The conversation as handed to the agent on each delegation.
     private var transcript: [[String: Any]] = []
+    /// The same conversation as shown in the panel and saved to Chats.
+    private var lines: [Session.Message] = []
 
     init(voice: String, urlSession: URLSession = .shared) {
         self.voice = voice
@@ -64,6 +68,7 @@ final class GPTLiveCallSession: VoiceCallSession {
         connectTask = nil
         delegationTask?.cancel()
         delegationTask = nil
+        stopImageProgress()
         if let sideband {
             sideband.send(.string(#"{"type":"session.close"}"#)) { _ in }
             sideband.cancel(with: .normalClosure, reason: nil)
@@ -183,7 +188,10 @@ final class GPTLiveCallSession: VoiceCallSession {
             NotchCallTimer.setMode(.listening)
         case let .turnDone(role, text):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { transcript.append(["role": role, "content": trimmed]) }
+            if !trimmed.isEmpty {
+                transcript.append(["role": role, "content": trimmed])
+                appendLine(Session.Message(role: role, text: trimmed))
+            }
             if role == "assistant" { NotchCallTimer.setMode(.listening) }
         case let .delegation(id, prompt):
             runDelegation(id: id, prompt: prompt)
@@ -198,11 +206,47 @@ final class GPTLiveCallSession: VoiceCallSession {
         }
     }
 
+    // MARK: - Images
+
+    /// GPT‑Live cannot see, but the agent it delegates to can: the pictures
+    /// join the history every delegation carries, and GPT‑Live is told to
+    /// delegate questions about them (see `GPTLiveProtocol.instructions`).
+    func share(images: [ImageAttachment]) -> Bool {
+        guard isActive, !images.isEmpty else { return false }
+        let turn = Self.sharedImagesTurn(images, vision: ModelRegistry.shared.selectedModel.supportsVision)
+        transcript.append(turn.api)
+        appendLine(turn.line)
+        logger.info("Sharing \(images.count) image(s) with the GPT-Live agent")
+        return true
+    }
+
+    /// The shared pictures as a user turn: API blocks for the agent (images when
+    /// its model can see, otherwise the text read from them) and a panel line.
+    static func sharedImagesTurn(_ images: [ImageAttachment], vision: Bool)
+        -> (api: [String: Any], line: Session.Message) {
+        let note = images.count == 1 ? "I've shared this image with you." : "I've shared these images with you."
+        let line = Session.Message(role: "user", text: note, attachments: images)
+        return (["role": "user", "content": ChatState.contentBlocks(for: line, vision: vision)], line)
+    }
+
+    private func appendLine(_ line: Session.Message) {
+        lines.append(line)
+        LiveVoiceState.shared.transcript = lines
+    }
+
     // MARK: - Delegation
 
+    private func stopImageProgress(id: String? = nil) {
+        guard let activeImageID, id == nil || id == activeImageID else { return }
+        LiveVoiceState.shared.imageGenerationFinished(id: activeImageID)
+        self.activeImageID = nil
+    }
+
     private func runDelegation(id: String, prompt: String?) {
+        // The fallback is the last thing the user *said*: a shared picture's
+        // turn holds blocks, not a string, and is already in the history.
         let request = (prompt?.isEmpty == false ? prompt : nil)
-            ?? transcript.last(where: { $0["role"] as? String == "user" })?["content"] as? String
+            ?? transcript.last(where: { $0["role"] as? String == "user" && $0["content"] is String })?["content"] as? String
         guard let request, !request.isEmpty else {
             send(GPTLiveProtocol.contextAppends(
                 text: "Ask the user to repeat their request; nothing was heard.", delegationId: id
@@ -212,6 +256,7 @@ final class GPTLiveCallSession: VoiceCallSession {
         logger.info("Delegation \(id, privacy: .public)")
         // A newer request supersedes one still running.
         delegationTask?.cancel()
+        stopImageProgress()
         NotchActivityIndicator.addProcess(id: "call-agent", label: "Working")
 
         let history = transcript + [["role": "user", "content": request]]
@@ -219,6 +264,10 @@ final class GPTLiveCallSession: VoiceCallSession {
             guard let self else { return }
             var answer = ""
             var hangUp = false
+            var delegationImageID: String?
+            defer {
+                if let delegationImageID { self.stopImageProgress(id: delegationImageID) }
+            }
             do {
                 _ = try await agentLoop.run(
                     messages: history,
@@ -226,7 +275,25 @@ final class GPTLiveCallSession: VoiceCallSession {
                     useBasePrompt: false,
                     maxTokens: 600,
                     onEvent: { event in
-                        if case let .textDelta(delta) = event { answer += delta }
+                        guard self.isActive, !Task.isCancelled else { return }
+                        switch event {
+                        case let .textDelta(delta):
+                            answer += delta
+                        case let .toolStart(name, toolID) where name == "generate_image":
+                            // Include the delegation so a cancelled, older run
+                            // cannot clear a newer run with a reused tool ID.
+                            let progressID = "\(id):\(toolID)"
+                            delegationImageID = progressID
+                            self.activeImageID = progressID
+                            LiveVoiceState.shared.imageGenerationStarted(id: progressID)
+                            NotchActivityIndicator.updateDetail(id: "call-agent", text: "Nebulising...")
+                        case let .toolResult(name, _) where name == "generate_image":
+                            if let delegationImageID { self.stopImageProgress(id: delegationImageID) }
+                            delegationImageID = nil
+                            NotchActivityIndicator.updateDetail(id: "call-agent", text: "Working")
+                        default:
+                            break
+                        }
                     }
                 )
             } catch is AgentEndCallError {
@@ -237,8 +304,8 @@ final class GPTLiveCallSession: VoiceCallSession {
                 logger.error("Delegation failed: \(error.localizedDescription, privacy: .public)")
                 answer = "That didn't work: \(error.localizedDescription). Tell the user briefly."
             }
-            NotchActivityIndicator.removeProcess(id: "call-agent")
             guard isActive, !Task.isCancelled else { return }
+            NotchActivityIndicator.removeProcess(id: "call-agent")
 
             if hangUp {
                 send(GPTLiveProtocol.contextAppends(text: "Say a brief goodbye; the call is ending.", delegationId: id))
@@ -274,12 +341,12 @@ final class GPTLiveCallSession: VoiceCallSession {
         NotchCallButton.endCall()
     }
 
+    /// Saved straight to Chats so shared pictures stay with the conversation.
     private func saveSession() {
-        guard var session = chatSession else { return }
-        session.messages = transcript.compactMap { ChatMessage.fromAPIFormat($0) }
-        guard !session.messages.isEmpty else { return }
-        session.updatedAt = Date()
-        chatSession = session
-        SessionStore.shared.save(session: session)
+        guard let chatSession, !lines.isEmpty else { return }
+        var saved = Session(id: chatSession.id, title: chatSession.title, messages: lines)
+        saved.createdAt = chatSession.createdAt
+        saved.updatedAt = Date()
+        SessionStore.shared.save(saved)
     }
 }

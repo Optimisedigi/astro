@@ -6,6 +6,27 @@ A native macOS assistant that lives in your menu bar and beside the notch. Chat,
 
 **Press Option + Space (⌥Space) and start talking.** Once voice is set up and microphone access is granted, the shortcut opens Astro and starts listening automatically. No extra microphone click is needed.
 
+## Install Astro
+
+**The first signed DMG and Homebrew release is not available yet.** Packaging is being prepared; publication is waiting for Apple Developer ID signing and notarization. [View GitHub Releases](https://github.com/Optimisedigi/astro/releases) for release availability.
+
+The planned download supports **Apple silicon Macs (M1 or later), macOS 15 or later**. End users will not need Xcode or a compiler.
+
+### Mac installer (DMG)
+
+Once the signed release is published, download **Astro.dmg**, open it, and drag **Astro.app** into **Applications**. Launch Astro and connect your AI account. The README will link directly to the verified DMG when it is available; there is no unsigned download to work around macOS security checks.
+
+### Homebrew
+
+The Homebrew installer will download that same signed DMG, rather than compiling Astro. **These commands become available after the first release and cask are published:**
+
+```sh
+brew tap optimisedigi/astro https://github.com/Optimisedigi/astro
+brew install --cask optimisedigi/astro/astro
+```
+
+For now, the available installation path is the [developer source build](#build-from-source-developers). Maintainers can follow the [signed-release guide](docs/RELEASING.md).
+
 ## A look inside
 
 The feature previews below show Astro's SwiftUI content views with **sample conversations and entries**, not private user data or recordings of live calls. Unlike the main screenshot above, these are rendered documentation previews; window chrome and some controls are omitted.
@@ -105,9 +126,9 @@ Microphone and speech-recognition permissions are needed for the corresponding v
 - **Optional local knowledge:** search indexed material through `qmd` when it is installed and configured.
 - **Permissions dashboard:** check microphone, speech recognition, Accessibility, screen recording, Full Disk Access and notifications as needed for the tools you use.
 
-## Install on your Mac
+## Build from source (developers)
 
-Requires **macOS 14+**, **Xcode 15+** and `xcodegen`. The installer builds Astro locally and installs it into `/Applications`; this is not a prebuilt, notarised download.
+Requires an **Apple silicon Mac**, **macOS 15+**, a current **Xcode** installation and `xcodegen`. This developer route compiles Astro locally. The `brew install xcodegen` command installs a build tool, not Astro itself.
 
 ```sh
 brew install xcodegen

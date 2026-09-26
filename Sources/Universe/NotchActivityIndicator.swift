@@ -149,7 +149,7 @@ enum NotchActivityIndicator {
 
     private static func showIndicator() {
         guard !isVisible else { return }
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.notchScreen else { return }
         NotchOverlayTracker.overlayDidShow()
 
         let displayText: String = {
@@ -284,7 +284,7 @@ enum NotchActivityIndicator {
         processes.removeAll()
         lastUpdatedID = nil
 
-        guard let panel, let shapeLayer, let screen = NSScreen.main else {
+        guard let panel, let shapeLayer, let screen = NSScreen.notchScreen else {
             teardown()
             return
         }
@@ -475,7 +475,7 @@ final class ShimmerTextView: NSView {
         textMaskLayer.alignmentMode = .center
         textMaskLayer.truncationMode = .end
         textMaskLayer.isWrapped = false
-        textMaskLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
+        textMaskLayer.contentsScale = NSScreen.notchScreen?.backingScaleFactor ?? 2.0
         textMaskLayer.frame = bounds
 
         // Gradient layer — horizontal sweep from base → highlight → base.

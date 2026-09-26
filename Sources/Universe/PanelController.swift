@@ -2,7 +2,12 @@ import AppKit
 import SwiftUI
 
 /// Borderless floating panel that drops down from the top-center of the screen.
+@MainActor
 final class FloatingPanel: NSPanel {
+    /// Runs instead of a normal paste when ⌘V carries an image, so a copied
+    /// picture attaches to the next message rather than doing nothing.
+    var onPasteImage: ((NSPasteboard) -> Void)?
+
     init(contentRect: NSRect, contentView: NSView) {
         super.init(
             contentRect: contentRect,
@@ -23,6 +28,70 @@ final class FloatingPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// While a text box is being typed in, its editor would take any image or
+    /// file dragged onto it, so the panel never saw the drop. Once SwiftUI has
+    /// set that editor up, it keeps only text drags and images fall through to
+    /// the panel. The editor itself is never replaced: SwiftUI's text box
+    /// requires its own, and swapping it crashed the app on focus.
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        let made = super.makeFirstResponder(responder)
+        if let editor = firstResponder as? NSTextView, editor.isFieldEditor {
+            editor.unregisterDraggedTypes()
+            editor.registerForDraggedTypes([.string])
+        }
+        return made
+    }
+
+    /// Key equivalents reach the window before the Edit menu, so this is where
+    /// ⌘V can be claimed for images. Text pastes fall through untouched.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if attachedSheet == nil, let onPasteImage, Self.isPaste(event),
+           ImageAttachmentLoader.pasteIsImage(.general) {
+            onPasteImage(.general)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    static func isPaste(_ event: NSEvent) -> Bool {
+        event.type == .keyDown
+            && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+            && event.charactersIgnoringModifiers?.lowercased() == "v"
+    }
+}
+
+/// The panel's content, and its drop target: an image dropped anywhere on the
+/// panel is attached to the next message.
+final class DropHostingView<Content: View>: NSHostingView<Content> {
+    var onDropImages: (([ImageAttachmentLoader.Payload]) -> Void)?
+
+    required init(rootView: Content) {
+        super.init(rootView: rootView)
+        registerForDraggedTypes(ImageAttachmentLoader.draggedTypes)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // .copy puts the "+" badge on the pointer: the only sign needed.
+        ImageAttachmentLoader.containsImage(sender.draggingPasteboard) ? .copy : []
+    }
+
+    /// Without this the drag goes dead after its first moment over the view.
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        ImageAttachmentLoader.containsImage(sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        ImageAttachmentLoader.containsImage(sender.draggingPasteboard)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let deliver = onDropImages
+        return ImageAttachmentLoader.receiveDrop(from: sender.draggingPasteboard) { deliver?($0) }
+    }
 }
 
 @MainActor
@@ -43,8 +112,13 @@ final class PanelController {
             width: width,
             height: height
         )
-        let hostingView = NSHostingView(rootView: ChatView(state: chatState))
+        let hostingView = DropHostingView(rootView: ChatView(state: chatState))
         panel = FloatingPanel(contentRect: rect, contentView: hostingView)
+
+        hostingView.onDropImages = { payloads in PanelController.shared.openWithAttachments(payloads) }
+        panel.onPasteImage = { pasteboard in
+            PanelController.shared.openWithAttachments(ImageAttachmentLoader.payloads(from: pasteboard))
+        }
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -96,12 +170,42 @@ final class PanelController {
         }
     }
 
-    /// Open the panel with images dropped on the notch wing already staged, so
-    /// the user only has to type the question.
-    func openWithAttachments(_ attachments: [ImageAttachment]) {
-        guard !attachments.isEmpty else { return }
-        show()
-        chatState.attach(attachments)
+    /// ⌃⌥I, and any image dropped or pasted: bring the panel up to take an
+    /// image — typing mode, mic off, cursor in the question box. It only ever
+    /// opens, never closes, so a second press cannot hang up a call. During a
+    /// live call it opens as it is, so the call keeps going and can talk about
+    /// the picture: typing mode would hang it up.
+    func openForImage() {
+        guard NotchCallButton.isInCall else {
+            openForTyping()
+            return
+        }
+        chatState.requestedTab = ChatView.chatsTabIndex
+        if panel.isVisible {
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+        } else {
+            show()
+        }
+    }
+
+    /// Open the panel (for typing, or as it is during a live call) and attach
+    /// images dropped or pasted onto it or onto the notch wing, so the user
+    /// only has to ask the question.
+    /// The picture is read (shrunk, text recognised) after the panel is up, so
+    /// the drop feels instant; "Reading image…" shows meanwhile.
+    func openWithAttachments(_ payloads: [ImageAttachmentLoader.Payload]) {
+        if panel.isVisible {
+            // Already open: stay in whatever mode it is in (a live call keeps
+            // running and can discuss the picture), just bring up Chats.
+            chatState.requestedTab = ChatView.chatsTabIndex
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+        } else {
+            openForImage()
+        }
+        let state = chatState
+        Task { @MainActor in await state.loadImages(payloads) }
     }
 
     /// Bring the panel up (idempotent) — used on launch and on reopen.
@@ -122,6 +226,7 @@ final class PanelController {
     /// microphone, which must not stay open behind a dismissed window.
     func hide() {
         panel.orderOut(nil)
+        chatState.imageNotice = nil
         MascotController.shared.pause()
         chatState.panelDidClose()
     }

@@ -26,6 +26,7 @@ enum GPTLiveProtocol {
     Keep the conversation natural while delegated work runs.
     Context on the commentary channel is silent background. You may use it, but never read it aloud.
     Context on the speakable channel is your answer to deliver naturally in your own words. Never mention the channel or the delegation.
+    The user may share images with the client during the call. You cannot see them, but the client can: delegate any question about an image, picture, photo or screenshot.
     Keep spoken replies to one to three short sentences. When the user says goodbye, say a brief goodbye.
     """
 

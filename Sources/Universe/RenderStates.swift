@@ -20,9 +20,20 @@ enum RenderStates {
     }
 
     /// Every UI state we assert on. Phases append their own list here.
-    static var all: [State] { phase1States + phase2States + phase3States + onboardingStates + tabStates + moodStates + notchStates }
+    static var all: [State] {
+        phase1States + phase2States + phase3States + onboardingStates + tabStates + moodStates + notchStates + journalStates
+    }
 
-    static func run(directory: String) -> Bool {
+    /// Focused runs avoid constructing unrelated sign-in states, which can
+    /// block on a macOS keychain permission prompt during render tests.
+    static func run(directory: String, only: String? = nil) -> Bool {
+        let states: [State]
+        switch only {
+        case "readme": states = readmeStates(directory: directory)
+        case "journal": states = journalStates
+        case "chat-image": states = phase1States.filter { $0.name.hasPrefix("chat-image") }
+        default: states = all
+        }
         let dir = URL(fileURLWithPath: directory, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -32,7 +43,7 @@ enum RenderStates {
         }
 
         var failures = 0
-        for state in all {
+        for state in states {
             let url = dir.appendingPathComponent("\(state.name).png")
             switch render(state, to: url) {
             case .success:
@@ -42,7 +53,7 @@ enum RenderStates {
                 failures += 1
             }
         }
-        print(failures == 0 ? "\nRENDER-STATES PASSED (\(all.count) states)" : "\nRENDER-STATES FAILED (\(failures) failures)")
+        print(failures == 0 ? "\nRENDER-STATES PASSED (\(states.count) states)" : "\nRENDER-STATES FAILED (\(failures) failures)")
         return failures == 0
     }
 

@@ -91,6 +91,37 @@ extension RenderStates {
                     )
                 }
             },
+            State("chat-image-generating", size: CGSize(width: 420, height: 260)) {
+                panel {
+                    MessageListView(messages: [user("Make a picture of a nebula"), assistant("")],
+                                    toolRuns: [ToolRun(id: "image-1", name: "generate_image", detail: nil)],
+                                    isStreaming: true)
+                }
+            },
+            State("chat-image-generating-dark", size: CGSize(width: 420, height: 260)) {
+                panel {
+                    MessageListView(messages: [user("Make a picture of a nebula"), assistant("")],
+                                    toolRuns: [ToolRun(id: "image-1", name: "generate_image", detail: nil)],
+                                    isStreaming: true)
+                }
+                .environment(\.colorScheme, .dark)
+            },
+            State("chat-image-generating-call", size: CGSize(width: 420, height: 260)) {
+                let call = LiveVoiceState.makeForTesting()
+                call.setActive(true)
+                call.imageGenerationStarted(id: "sample-call")
+                return panel {
+                    MessageListView(messages: [user("Make a picture of a nebula")], toolRuns: call.imageToolRuns)
+                }
+                .environment(\.colorScheme, .dark)
+            },
+            State("chat-image-failed", size: CGSize(width: 420, height: 260)) {
+                panel {
+                    MessageListView(messages: [user("Make a picture of a nebula"), assistant("")],
+                                    toolRuns: [ToolRun(id: "image-1", name: "generate_image", detail: nil, status: .failed)],
+                                    isStreaming: false)
+                }
+            },
             State("chat-error", size: CGSize(width: 420, height: 260)) {
                 panel {
                     MessageListView(

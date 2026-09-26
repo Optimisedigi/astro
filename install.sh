@@ -13,6 +13,7 @@ readonly DEST="/Applications/Astro.app"
 # installed would give macOS two copies of one app. It goes to the Trash (not
 # deleted) so it can be restored.
 readonly LEGACY="/Applications/Universe.app"
+readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 main() {
   cd "$(dirname "$0")"
@@ -53,7 +54,10 @@ main() {
 
   echo "==> Installing to $DEST"
   rm -rf "$DEST"
-  cp -R "$app" "$DEST"
+  # Moved, not copied: a copy left in the build folder is a second Astro that
+  # Spotlight and macOS can open instead of this one. The next build remakes it.
+  mv "$app" "$DEST"
+  "$LSREGISTER" -f "$DEST"
 
   if [[ -d "$LEGACY" ]]; then
     local trashed

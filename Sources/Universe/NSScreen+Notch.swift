@@ -6,6 +6,24 @@ extension NSScreen {
         auxiliaryTopLeftArea != nil && auxiliaryTopRightArea != nil
     }
 
+    /// The screen every notch element (wing, virtual notch, toasts, call timer)
+    /// is drawn on: the main display, the one with the menu bar (chosen in System
+    /// Settings → Displays). On a screen without a hardware notch, the virtual
+    /// notch is drawn there. Displays changing re-runs the layout, so the icons
+    /// follow when a different screen is made the main display.
+    ///
+    /// Not `NSScreen.main`: that is the screen in use at the moment, so the icons
+    /// landed wherever the user happened to be working when Astro started.
+    static var notchScreen: NSScreen? {
+        notchScreen(from: screens) ?? main
+    }
+
+    /// The main display among `screens`: AppKit always lists it first.
+    /// Split out for the self-test.
+    static func notchScreen(from screens: [NSScreen]) -> NSScreen? {
+        screens.first
+    }
+
     /// How far the wings tuck *under* the notch shape. Small overlap, so adjacent
     /// UI meets the black cutout with no seam of wallpaper between them.
     static let notchTuck: CGFloat = 4

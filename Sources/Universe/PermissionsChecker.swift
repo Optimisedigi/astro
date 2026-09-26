@@ -50,6 +50,7 @@ final class PermissionsChecker: ObservableObject {
 
     init() {
         permissions = Self.blueprint
+        guard !CommandLine.arguments.contains("--selftest") else { return }
         observeAccessibilityChanges()
         Task { await refresh() }
     }
@@ -107,6 +108,9 @@ final class PermissionsChecker: ObservableObject {
     }
 
     func refresh() async {
+        // CLI-launched archive tests are not a permission-bearing app session.
+        // Even a speech authorization preflight can terminate such a process.
+        guard !CommandLine.arguments.contains("--selftest") else { return }
         isRefreshing = true
         let notifications = await notificationStatus()
         var next = Self.blueprint

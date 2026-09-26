@@ -13,6 +13,33 @@ struct DiaryEntry: Codable, Identifiable, Equatable {
     var id: UUID = .init()
     var text: String
     var createdAt: Date = .init()
+    /// The coloured marker picked from the entry's dot, if any. Optional, so
+    /// entries saved before markers existed still load.
+    var highlight: JournalHighlight?
+}
+
+/// Markers for journal entries, with Pile's default names and colours.
+enum JournalHighlight: String, Codable, CaseIterable, Identifiable {
+    case highlight, doLater, newIdea
+
+    var id: String { rawValue }
+
+    var name: String {
+        switch self {
+        case .highlight: "Highlight"
+        case .doLater: "Do later"
+        case .newIdea: "New idea"
+        }
+    }
+
+    /// sRGB components of Pile's #FF703A, #4DE64D and #017AFF.
+    var rgb: (red: Double, green: Double, blue: Double) {
+        switch self {
+        case .highlight: (1.0, 0.439, 0.227)
+        case .doLater: (0.302, 0.902, 0.302)
+        case .newIdea: (0.004, 0.478, 1.0)
+        }
+    }
 }
 
 /// Persists the diary as one JSON file per day in Application Support.
@@ -87,6 +114,10 @@ final class DiaryStore: ObservableObject {
             days[index] = day
             return true
         }
+        // A page absent from memory may have failed to decode. Never replace
+        // its on-disk bytes with an apparently new day; the UI keeps the draft
+        // when saving fails, so the original file can be recovered separately.
+        guard !FileManager.default.fileExists(atPath: fileURL(for: key).path) else { return false }
         let day = DiaryDay(date: key, entries: [entry])
         guard write(day) else { return false }
         days.append(day)
@@ -94,27 +125,68 @@ final class DiaryStore: ObservableObject {
         return true
     }
 
-    func updateEntry(dayKey: String, entryID: UUID, text: String) {
+    @discardableResult
+    func updateEntry(dayKey: String, entryID: UUID, text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let dayIndex = days.firstIndex(where: { $0.date == dayKey }),
               let entryIndex = days[dayIndex].entries.firstIndex(where: { $0.id == entryID })
-        else { return }
-        days[dayIndex].entries[entryIndex].text = String(trimmed.prefix(Self.maxEntryChars))
-        write(days[dayIndex])
+        else { return false }
+        var updated = days[dayIndex]
+        updated.entries[entryIndex].text = String(trimmed.prefix(Self.maxEntryChars))
+        guard write(updated) else { return false }
+        days[dayIndex] = updated
+        return true
     }
 
-    func deleteEntry(dayKey: String, entryID: UUID) {
-        guard let dayIndex = days.firstIndex(where: { $0.date == dayKey }) else { return }
-        days[dayIndex].entries.removeAll { $0.id == entryID }
+    /// Sets or clears an entry's marker. Commit to memory only once it is on
+    /// disk, so a failed write cannot make an unsaved marker look saved.
+    @discardableResult
+    func setHighlight(dayKey: String, entryID: UUID, highlight: JournalHighlight?) -> Bool {
+        guard let dayIndex = days.firstIndex(where: { $0.date == dayKey }),
+              let entryIndex = days[dayIndex].entries.firstIndex(where: { $0.id == entryID })
+        else { return false }
+        var day = days[dayIndex]
+        day.entries[entryIndex].highlight = highlight
+        guard write(day) else { return false }
+        days[dayIndex] = day
+        return true
+    }
+
+    /// Applies an asynchronous format result only to the exact saved text it
+    /// formatted. A concurrent edit or deletion leaves the user's work alone.
+    @discardableResult
+    func updateEntry(dayKey: String, entryID: UUID, text: String, ifUnchangedFrom original: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = days.firstIndex(where: { $0.date == dayKey }),
+              let entryIndex = days[index].entries.firstIndex(where: { $0.id == entryID }),
+              days[index].entries[entryIndex].text == original else { return false }
+        var updated = days[index]
+        updated.entries[entryIndex].text = String(trimmed.prefix(Self.maxEntryChars))
+        guard write(updated) else { return false }
+        days[index] = updated
+        return true
+    }
+
+    @discardableResult
+    func deleteEntry(dayKey: String, entryID: UUID) -> Bool {
+        guard let dayIndex = days.firstIndex(where: { $0.date == dayKey }),
+              let entryIndex = days[dayIndex].entries.firstIndex(where: { $0.id == entryID }) else { return false }
+        var updated = days[dayIndex]
+        updated.entries.remove(at: entryIndex)
 
         // An empty page is removed entirely rather than left as a blank day.
-        if days[dayIndex].entries.isEmpty {
-            let day = days.remove(at: dayIndex)
-            try? FileManager.default.removeItem(at: fileURL(for: day.date))
+        // Keep the entry visible if removing its file fails.
+        if updated.entries.isEmpty {
+            do { try FileManager.default.removeItem(at: fileURL(for: dayKey)) }
+            catch { return false }
+            days.remove(at: dayIndex)
         } else {
-            write(days[dayIndex])
+            guard write(updated) else { return false }
+            days[dayIndex] = updated
         }
+        return true
     }
 
     /// The page for a given day, or nil if nothing was written.
