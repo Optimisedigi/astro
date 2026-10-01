@@ -1,5 +1,7 @@
 .build/
 Universe.xcodeproj/
+# Xcode's per-user state for the Swift package (recreated automatically)
+.swiftpm/
 .DS_Store
 
 # Agent scratch (uploads, plans, session state)
