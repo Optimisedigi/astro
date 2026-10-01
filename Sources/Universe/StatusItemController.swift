@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 /// The menubar mascot, as a hand-built `NSStatusItem` rather than SwiftUI's
@@ -97,13 +98,44 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         add("Advanced (API key)…", #selector(openAdvanced))
         menu.addItem(.separator())
+        add("Open at Login", #selector(toggleLaunchAtLogin))
+        menu.items.last?.identifier = Self.launchAtLoginItemID
+        menu.addItem(.separator())
         add("Quit", #selector(quit), key: "q")
         return menu
     }
 
-    /// Hide "Stop" unless there is something to stop.
+    /// Hide "Stop" unless there is something to stop, and show the current
+    /// open-at-login state.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.item(at: 0)?.isHidden = !isActive
+        updateLaunchAtLoginItem(in: menu)
+    }
+
+    private static let launchAtLoginItemID = NSUserInterfaceItemIdentifier("launchAtLogin")
+
+    /// Read fresh on every open: the user can also change it in System Settings.
+    private func updateLaunchAtLoginItem(in menu: NSMenu) {
+        guard let item = menu.items.first(where: { $0.identifier == Self.launchAtLoginItemID }) else { return }
+        switch LaunchAtLogin.state {
+        case .on:
+            item.title = "Open at Login"
+            item.state = .on
+        case .off:
+            item.title = "Open at Login"
+            item.state = .off
+        case .needsApproval:
+            item.title = "Open at Login (allow in System Settings…)"
+            item.state = .mixed
+        }
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        switch LaunchAtLogin.state {
+        case .on: LaunchAtLogin.setEnabled(false)
+        case .off: LaunchAtLogin.setEnabled(true)
+        case .needsApproval: SMAppService.openSystemSettingsLoginItems()
+        }
     }
 
     @objc private func stopFromMenu() { interrupt() }

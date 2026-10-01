@@ -1417,6 +1417,14 @@ enum SelfTest {
         check(AppDelegate.shouldYield(selfIsInstalled: false, otherIsInstalled: false),
               "instance: two build-folder copies keep first-one-wins")
 
+        // Open at login: on once for the installed app, then the user's choice wins.
+        check(LaunchAtLogin.shouldApplyDefault(alreadyApplied: false, isInstalledCopy: true),
+              "login item: installed copy turns on open-at-login the first time")
+        check(!LaunchAtLogin.shouldApplyDefault(alreadyApplied: true, isInstalledCopy: true),
+              "login item: once decided, launches never re-apply the default")
+        check(!LaunchAtLogin.shouldApplyDefault(alreadyApplied: false, isInstalledCopy: false),
+              "login item: a build-folder copy never registers itself")
+
         // Eviction must actually complete before launch continues, or the winner
         // registers ⌥Space while the rival still holds it and the hotkey dies.
         let started = Date()

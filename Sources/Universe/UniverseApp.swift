@@ -58,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard claimSingleInstance() else { return }
 
         migrateLegacyDataDirectory()
+        LaunchAtLogin.applyDefaultIfNeeded()
         NSApp.setActivationPolicy(.accessory) // LSUIElement equivalent: no Dock icon
         StatusItemController.shared.install()
         HotKeyManager.shared.onHotKey = {
