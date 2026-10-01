@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Marks the entire input section as draggable without covering its controls.
+/// Marks the input section as draggable without covering its controls. Presses
+/// on the text box itself select text instead of moving the window.
 struct WindowDragHandle: NSViewRepresentable {
     func makeNSView(context: Context) -> WindowDragView {
         WindowDragView(frame: .zero)
@@ -22,7 +23,7 @@ final class WindowDragView: NSView, NSGestureRecognizerDelegate {
         pan.delegate = self
         pan.buttonMask = 1
         // Clicks still focus the text field or activate a button. Only movement
-        // becomes a window drag; dragging text in this section moves the window.
+        // becomes a window drag, and never from inside the text box.
         pan.delaysPrimaryMouseButtonEvents = false
     }
 
@@ -51,9 +52,24 @@ final class WindowDragView: NSView, NSGestureRecognizerDelegate {
         guard let window, event.window === window, window.isMovable,
               window.attachedSheet == nil, !isHiddenOrHasHiddenAncestor,
               event.type == .leftMouseDown,
-              bounds.intersection(visibleRect).contains(convert(event.locationInWindow, from: nil)) else { return false }
+              bounds.intersection(visibleRect).contains(convert(event.locationInWindow, from: nil)),
+              !Self.isTextSelectable(at: event.locationInWindow, in: window) else { return false }
         dragStart = (window.convertPoint(toScreen: event.locationInWindow), window.frame.origin)
         return true
+    }
+
+    /// True when the press lands on text the user can select or edit, such as
+    /// the "Ask anything" field or its live editor, so dragging there selects.
+    static func isTextSelectable(at locationInWindow: NSPoint, in window: NSWindow) -> Bool {
+        guard let content = window.contentView else { return false }
+        let point = content.superview?.convert(locationInWindow, from: nil) ?? locationInWindow
+        var view = content.hitTest(point)
+        while let current = view {
+            if let text = current as? NSText, text.isEditable || text.isSelectable { return true }
+            if let field = current as? NSTextField, field.isEditable || field.isSelectable { return true }
+            view = current.superview
+        }
+        return false
     }
 
     @objc private func didPan(_ gesture: NSPanGestureRecognizer) {

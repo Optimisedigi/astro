@@ -32,19 +32,23 @@ extension SelfTest {
                                                 eventNumber: 0, clickCount: 1, pressure: 1) else { return false }
             return region.gestureRecognizer(pan, shouldAttemptToRecognizeWith: event)
         }
-        for x: CGFloat in [10, 100, 200, 360, 395] {
+        for x: CGFloat in [10, 360, 395] {
             check(press(NSPoint(x: x, y: 170)),
-                  "window drag: accepts the input section at x=\(Int(x)), including text and buttons")
+                  "window drag: accepts the input section at x=\(Int(x)), including buttons")
+        }
+        for x: CGFloat in [100, 200] {
+            check(!press(NSPoint(x: x, y: 170)),
+                  "window drag: the text box at x=\(Int(x)) selects text instead of moving the window")
         }
         // AppKit's visibleRect can extend beyond an unclipped view's bounds.
         check(!press(NSPoint(x: 100, y: 80)), "window drag: content below the input section does not move the window")
-        check(!press(NSPoint(x: 100, y: 170), type: .rightMouseDown),
+        check(!press(NSPoint(x: 10, y: 170), type: .rightMouseDown),
               "window drag: right-click is not a window drag")
         region.isHidden = true
-        check(!press(NSPoint(x: 100, y: 170)), "window drag: a hidden region is inactive")
+        check(!press(NSPoint(x: 10, y: 170)), "window drag: a hidden region is inactive")
         region.isHidden = false
 
-        let location = NSPoint(x: 100, y: 170)
+        let location = NSPoint(x: 10, y: 170)
         let origin = window.frame.origin
         let pointer = window.convertPoint(toScreen: location)
         check(press(location) && window.frame.origin == origin,

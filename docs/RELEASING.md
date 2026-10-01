@@ -69,7 +69,8 @@ On a separate Mac or clean user account, download the final artifact through a b
 
 - The DMG opens, and Astro can be dragged to Applications and launched without disabling Gatekeeper.
 - Microphone, speech recognition and automation permission prompts are understandable; granting and denying permissions both work.
-- Option-Space opens the panel; the full Ask anything section can be dragged without breaking clicks.
+- Option-Space opens the panel; the Ask anything section can be dragged without breaking clicks, and dragging inside the Ask anything text box selects text instead.
+- The panel's mic button pauses and resumes listening without changing the Microphone switch in Voice Settings.
 - Chat, image attachments, image creation, journal save/reload, reminders and the selected live voice engine work with the test account.
 - A connection failure and a cancelled call/tool return to a usable state.
 - The app works without Xcode installed. Kokoro's optional model downloads and provider sign-in are tested separately; they are not bundled account access.

@@ -761,6 +761,9 @@ enum SelfTest {
             return view.subviews.lazy.compactMap(firstTextField(in:)).first
         }
         if let field = firstTextField(in: swiftUIField) {
+            let center = field.convert(NSPoint(x: field.bounds.midX, y: field.bounds.midY), to: nil)
+            check(WindowDragView.isTextSelectable(at: center, in: fieldWindow),
+                  "window drag: the real Ask anything box is recognised as selectable text")
             let focused = fieldWindow.makeFirstResponder(field)
             check(focused && field.currentEditor() != nil,
                   "panel: the SwiftUI question box takes the cursor without crashing")
@@ -1241,6 +1244,23 @@ enum SelfTest {
         typingState.panelDidClose()
         check(!typingState.isTypingOnly, "typing: closing the panel ends typing mode")
         typingState.voiceMode = savedVoiceMode
+
+        // The panel's mic button pauses listening for now; the Microphone
+        // setting changes only in Voice Settings. (Resuming would ask for mic
+        // permission, so only the pause is exercised here.)
+        let pauseState = ChatState()
+        let savedPauseVoiceMode = pauseState.voiceMode
+        pauseState.voiceMode = true
+        if !pauseState.usesLiveVoice {
+            check(pauseState.dictationOn, "mic button: shows on while the Microphone setting is on")
+            pauseState.toggleMic()
+            check(!pauseState.dictationOn && !pauseState.voice.isListening,
+                  "mic button: pressing it pauses listening")
+            check(pauseState.voiceMode, "mic button: pausing leaves the Microphone setting on")
+            pauseState.panelDidClose()
+            check(pauseState.voiceMode, "mic button: the setting is still on after the panel closes")
+        }
+        pauseState.voiceMode = savedPauseVoiceMode
 
         // ⌥Space, ⇧⌥Space and ⌃⌥I each reach their own action.
         let hotKeys = HotKeyManager()

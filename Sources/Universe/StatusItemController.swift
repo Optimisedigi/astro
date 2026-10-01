@@ -59,7 +59,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func interrupt() {
         let chat = PanelController.shared.chatState
         SpeechService.shared.stop()
-        if chat.voiceMode {
+        if chat.wantsDictation {
             chat.suspendVoiceMode()
         } else {
             VoiceService.shared.stopListening()

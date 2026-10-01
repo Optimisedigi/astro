@@ -142,6 +142,8 @@ final class ChatState: ObservableObject {
     func panelDidClose() {
         panelVisible = false
         isTypingOnly = false
+        // A mic the panel button turned on is for this open only.
+        micOnForThisOpen = false
         // A live conversation the panel opened ends with it, like dictation.
         // Calls started from the notch keep running.
         if panelStartedCall {
@@ -204,10 +206,11 @@ final class ChatState: ObservableObject {
         }
     }
 
-    /// The panel's mic button. With live voice on it starts or stops a live
-    /// GPT conversation (the same session as a notch call) and remembers the
-    /// choice, so ⌥Space starts talking next time; otherwise it toggles the
-    /// built-in dictation.
+    /// The panel's mic button: a pause/resume for right now. It never changes
+    /// the Microphone setting in Voice Settings; that changes only there.
+    /// With live voice on it starts or ends a live GPT conversation (the same
+    /// session as a notch call); otherwise it pauses or resumes dictation.
+    /// The next panel open follows the setting again.
     func toggleMic() {
         // The mic button always means "talk now", so it ends typing mode.
         isTypingOnly = false
@@ -216,48 +219,73 @@ final class ChatState: ObservableObject {
             voice.stopListening()
             speech.stop()
             if NotchCallButton.isInCall {
-                // Only a conversation the panel started changes the remembered
-                // choice; hanging up a notch call leaves ⌥Space behaviour alone.
-                if panelStartedCall { voiceMode = false }
                 panelStartedCall = false
                 NotchCallButton.endCall()
             } else {
-                voiceMode = true
                 startLiveCallFromPanel()
             }
-        } else if voiceModeSuspended {
-            // Mic is on in settings but paused (typing or the diary): the
-            // button means "talk now", not "turn the setting off".
-            voiceModeSuspended = false
-            enableVoiceMode()
-        } else if voiceMode {
-            disableVoiceMode()
+        } else if dictationOn {
+            // Pause: release the mic until the button is pressed again or the
+            // panel next opens.
+            suspendVoiceMode()
         } else {
-            enableVoiceMode()
+            // Talk now. With the setting off, the mic is on for this open only.
+            voiceModeSuspended = false
+            if !voiceMode { micOnForThisOpen = true }
+            // Refused permission leaves the button showing off, not a red mic
+            // over a closed microphone. The setting itself is left alone.
+            startDictation { [weak self] in
+                guard let self else { return }
+                self.micOnForThisOpen = false
+                if self.voiceMode { self.voiceModeSuspended = true }
+            }
         }
     }
 
+    /// The Microphone setting in Voice Settings was switched on.
     func enableVoiceMode() {
         voiceMode = true
+        voiceModeSuspended = false
+        startDictation { [weak self] in self?.voiceMode = false }
+    }
+
+    /// The Microphone setting in Voice Settings was switched off.
+    func disableVoiceMode() {
+        voiceMode = false
+        micOnForThisOpen = false
+        voiceModeSuspended = false
+        releaseVoiceHandlers()
+    }
+
+    /// Opens the mic for dictation, asking for permission if needed.
+    /// `denied` undoes whatever turned the mic on when permission is refused.
+    private func startDictation(denied: @escaping () -> Void) {
         KokoroManager.shared.prewarm()
         wireUtteranceHandler()
         Task {
             guard await voice.requestPermissions() else {
                 errorMessage = VoiceService.VoiceError.notAuthorized.localizedDescription
-                voiceMode = false
+                denied()
                 return
             }
             try? voice.startListening()
         }
     }
 
-    func disableVoiceMode() {
-        voiceMode = false
-        releaseVoiceHandlers()
-    }
+    /// The panel's mic button turned dictation on while the Microphone
+    /// setting is off. Never saved; cleared when the panel closes.
+    @Published private(set) var micOnForThisOpen = false
 
-    /// True while another feature (the diary) has borrowed the microphone.
-    private var voiceModeSuspended = false
+    /// Chat dictation should run: the setting is on, or the panel's mic
+    /// button turned it on for this open.
+    var wantsDictation: Bool { voiceMode || micOnForThisOpen }
+
+    /// What the panel's mic button shows: dictation wanted and not paused.
+    var dictationOn: Bool { wantsDictation && !voiceModeSuspended }
+
+    /// True while the mic is paused without changing the setting: a stop
+    /// click, the panel's mic button, typing mode, or the diary borrowing it.
+    @Published private var voiceModeSuspended = false
 
     /// Hands the microphone to another part of the app without changing the
     /// user's saved preference.
@@ -266,7 +294,7 @@ final class ChatState: ObservableObject {
     /// of the way turned chat's voice mode off permanently — it stayed off across
     /// relaunches. Suspending leaves the preference alone.
     func suspendVoiceMode() {
-        guard voiceMode else { return }
+        guard wantsDictation else { return }
         voiceModeSuspended = true
         releaseVoiceHandlers()
     }
@@ -294,7 +322,7 @@ final class ChatState: ObservableObject {
         // In typing mode the mic stays off, e.g. when leaving the diary.
         guard voiceModeSuspended, !isTypingOnly else { return }
         voiceModeSuspended = false
-        guard voiceMode, panelVisible, !usesLiveVoice, VoiceService.isAlreadyAuthorized else { return }
+        guard wantsDictation, panelVisible, !usesLiveVoice, VoiceService.isAlreadyAuthorized else { return }
         wireUtteranceHandler()
         try? voice.startListening()
     }
@@ -316,7 +344,7 @@ final class ChatState: ObservableObject {
             while speech.isSpeaking { try? await Task.sleep(for: .milliseconds(200)) }
             // A stop click suspends mid-reply; reopening the mic here would
             // undo the silence the user just asked for.
-            if voiceMode, panelVisible, !voiceModeSuspended, !usesLiveVoice { try? voice.startListening() }
+            if wantsDictation, panelVisible, !voiceModeSuspended, !usesLiveVoice { try? voice.startListening() }
         }
     }
 
@@ -532,7 +560,7 @@ final class ChatState: ObservableObject {
             let speak = KokoroManager.shared.speechEnabled
             do {
                 let loop = AgentLoop(workspace: workspace)
-                if voiceMode { voice.stopListening() }
+                if wantsDictation { voice.stopListening() }
                 queue.reset()
                 queue.onVisible = { [weak self] text in
                     guard let self, let last = self.session.messages.indices.last else { return }
@@ -573,7 +601,7 @@ final class ChatState: ObservableObject {
                     // reopens only once she has actually stopped talking.
                     await speech.finishStreaming()
                 }
-                if voiceMode { resumeListeningAfterReply() }
+                if wantsDictation { resumeListeningAfterReply() }
             } catch {
                 // Drop any half-spoken reply rather than talk over the error.
                 if speak { speech.stop() }
@@ -584,7 +612,7 @@ final class ChatState: ObservableObject {
                     try? await Task.sleep(for: .seconds(4))
                     if MenuBarMood.shared.mood == .error { MenuBarMood.shared.setActivity(nil) }
                 }
-                if voiceMode, !voiceModeSuspended, !usesLiveVoice { try? voice.startListening() }
+                if wantsDictation, !voiceModeSuspended, !usesLiveVoice { try? voice.startListening() }
             }
         }
     }
@@ -628,7 +656,7 @@ struct ChatView: View {
     /// Red mic: a live conversation is running (live voice on) or dictation is
     /// on (live voice off).
     private var micIsOn: Bool {
-        realtime.engine == .openAIRealtime ? live.isActive : state.voiceMode
+        realtime.engine == .openAIRealtime ? live.isActive : state.dictationOn
     }
 
     private var contentBox: some View {
@@ -913,10 +941,10 @@ struct ChatView: View {
             .buttonStyle(.plain)
             .help(realtime.engine == .openAIRealtime
                 ? (live.isActive ? "End live voice" : "Talk with OpenAI live voice")
-                : "Toggle voice mode")
+                : (micIsOn ? "Pause listening" : "Listen now"))
             .accessibilityLabel(realtime.engine == .openAIRealtime
                 ? (live.isActive ? "End live voice" : "Start live voice")
-                : "Voice mode")
+                : (micIsOn ? "Pause listening" : "Listen now"))
 
             if live.isActive {
                 // Hide the panel but keep talking; the waveform by the notch
