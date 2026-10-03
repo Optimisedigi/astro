@@ -38,7 +38,12 @@ targets:
     type: application
     platform: macOS
     sources:
-      - Sources/Universe
+      - path: Sources/Universe
+        excludes:
+          - ResearchTemplates
+      - path: Sources/Universe/ResearchTemplates
+        type: folder
+        buildPhase: resources
       - path: Resources/sound-step.mp3
         buildPhase: resources
       - path: Resources/notification.mp3

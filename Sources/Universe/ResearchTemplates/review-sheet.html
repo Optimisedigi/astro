@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="{{POLICY}}">
+<title>{{TITLE}}</title>
+<style>{{CSS}}</style>
+</head>
+<body>
+<main class="sheet">
+  <header class="head">
+    <div class="head-main">
+      <span class="mono">{{KIND}} · {{DATE}}</span>
+      <h1>{{TITLE}}</h1>
+      {{SUBTITLE}}
+    </div>
+    <div class="verdict">
+      <div class="verdict-top"><span class="mono">Verdict</span><button class="theme-toggle" type="button" aria-label="Switch between light and dark theme">◐ Theme</button></div>
+      <p>{{VERDICT}}</p>
+    </div>
+  </header>
+  <section class="facts" aria-label="Key facts">{{FACTS}}</section>
+  {{ITEMS}}
+  {{COMPARISON}}
+  <footer class="foot">
+    <div><h2>Confidence notes</h2><ul>{{NOTES}}</ul></div>
+    <div><h2>Sources</h2><ul>{{SOURCES}}</ul></div>
+  </footer>
+</main>
+<script>{{SCRIPT}}</script>
+</body>
+</html>

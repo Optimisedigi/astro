@@ -795,73 +795,30 @@ struct ChatView: View {
     }
 
     private var chatBody: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                if live.isActive {
-                    // A live voice conversation: what you said and what GPT said,
-                    // word by word as it arrives.
-                    if live.transcript.isEmpty && !live.isGeneratingImage {
-                        Text("Listening…")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 60)
-                    } else {
-                        MessageListView(messages: live.transcript, toolRuns: live.imageToolRuns)
-                    }
-                } else if state.session.messages.isEmpty {
-                    EmptyChatView(needsSignIn: state.needsSignIn) { SettingsWindowController.shared.show() }
+        TranscriptScrollView {
+            if live.isActive {
+                // A live voice conversation: what you said and what GPT said,
+                // word by word as it arrives.
+                if live.transcript.isEmpty && !live.isGeneratingImage {
+                    Text("Listening…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
                         .padding(.top, 60)
                 } else {
-                    MessageListView(
-                        messages: state.session.messages,
-                        toolRuns: state.toolRuns,
-                        isStreaming: state.isStreaming,
-                        errorMessage: state.errorMessage,
-                        retry: state.retryLastMessage
-                    )
+                    MessageListView(messages: live.transcript, toolRuns: live.imageToolRuns)
                 }
-            }
-            .onChange(of: state.session.messages.last?.attachments?.count) { _, count in
-                // The image is delivered before the model writes its follow-up.
-                // Bring that newly visible bubble into view immediately.
-                if count ?? 0 > 0, let last = state.session.messages.last {
-                    if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    } else {
-                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                }
-            }
-            .onChange(of: live.isGeneratingImage) { _, generating in
-                if generating {
-                    if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-                        proxy.scrollTo("tool-progress", anchor: .bottom)
-                    } else {
-                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("tool-progress", anchor: .bottom) }
-                    }
-                }
-            }
-            .onChange(of: state.toolRuns.count) { _, _ in
-                // Tool rows sit below the reply. Without this the image request
-                // can run for a minute while its progress stays offscreen.
-                if state.toolRuns.last?.showsImageOrb == true {
-                    if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-                        proxy.scrollTo("tool-progress", anchor: .bottom)
-                    } else {
-                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("tool-progress", anchor: .bottom) }
-                    }
-                }
-            }
-            .onChange(of: state.session.messages.last?.text) { _, _ in
-                if let last = state.session.messages.last {
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
-                }
-            }
-            .onChange(of: live.transcript.last?.text) { _, _ in
-                if let last = live.transcript.last {
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
-                }
+            } else if state.session.messages.isEmpty {
+                EmptyChatView(needsSignIn: state.needsSignIn) { SettingsWindowController.shared.show() }
+                    .padding(.top, 60)
+            } else {
+                MessageListView(
+                    messages: state.session.messages,
+                    toolRuns: state.toolRuns,
+                    isStreaming: state.isStreaming,
+                    errorMessage: state.errorMessage,
+                    retry: state.retryLastMessage
+                )
             }
         }
     }

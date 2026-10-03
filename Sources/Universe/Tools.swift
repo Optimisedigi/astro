@@ -26,12 +26,24 @@ private func stringParam(_ input: [String: Any], _ key: String) throws -> String
     return value
 }
 
-/// Contain paths inside the working directory.
-private func resolve(_ path: String, in wd: URL) throws -> URL {
-    // resolvingSymlinksInPath defeats symlink escapes; trailing "/" defeats sibling-prefix matches
-    let url = URL(fileURLWithPath: path, relativeTo: wd).standardized.resolvingSymlinksInPath()
+/// Contain paths inside the working directory, plus HTML in Documents/astro.
+private func resolve(_ path: String, in wd: URL, reportsDirectory: URL) throws -> URL {
+    let candidate = URL(fileURLWithPath: path, relativeTo: wd).standardizedFileURL
+    // Foundation leaves dangling symlinks unresolved. A later write would
+    // follow them, so reject broken links in the file or any parent first.
+    var ancestor = candidate
+    while ancestor.path != "/" {
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: ancestor.path)) != nil,
+           !FileManager.default.fileExists(atPath: ancestor.path) {
+            throw ToolError.notFound("path escapes workspace: \(path)")
+        }
+        ancestor.deleteLastPathComponent()
+    }
+    // Canonical paths defeat existing symlink escapes; "/" defeats sibling prefixes.
+    let url = candidate.resolvingSymlinksInPath()
     let wdPath = wd.standardized.resolvingSymlinksInPath().path
-    guard url.path == wdPath || url.path.hasPrefix(wdPath + "/") else {
+    guard url.path == wdPath || url.path.hasPrefix(wdPath + "/")
+            || ResearchReports.containsHTML(url, in: reportsDirectory) else {
         throw ToolError.notFound("path escapes workspace: \(path)")
     }
     return url
@@ -71,6 +83,11 @@ struct BashTool: AgentTool {
 }
 
 struct ReadTool: AgentTool {
+    let reportsDirectory: URL
+
+    init(reportsDirectory: URL = ResearchReports.directory) {
+        self.reportsDirectory = reportsDirectory
+    }
     let name = "read"
     let description = "Read a file's contents. Returns numbered lines (cat -n style). Output truncated to 2000 lines or 50KB."
     let inputSchema: [String: Any] = [
@@ -80,7 +97,7 @@ struct ReadTool: AgentTool {
     ]
 
     func run(input: [String: Any], workingDirectory: URL) async throws -> String {
-        let url = try resolve(stringParam(input, "file_path"), in: workingDirectory)
+        let url = try resolve(stringParam(input, "file_path"), in: workingDirectory, reportsDirectory: reportsDirectory)
         let text = try String(contentsOf: url, encoding: .utf8)
         let lines = text.components(separatedBy: "\n").prefix(2000)
         var result = lines.enumerated().map { "\($0.offset + 1)\t\($0.element)" }.joined(separator: "\n")
@@ -90,6 +107,11 @@ struct ReadTool: AgentTool {
 }
 
 struct WriteTool: AgentTool {
+    let reportsDirectory: URL
+
+    init(reportsDirectory: URL = ResearchReports.directory) {
+        self.reportsDirectory = reportsDirectory
+    }
     let name = "write"
     let description = "Write content to a file. Creates parent directories if needed."
     let inputSchema: [String: Any] = [
@@ -102,7 +124,7 @@ struct WriteTool: AgentTool {
     ]
 
     func run(input: [String: Any], workingDirectory: URL) async throws -> String {
-        let url = try resolve(stringParam(input, "file_path"), in: workingDirectory)
+        let url = try resolve(stringParam(input, "file_path"), in: workingDirectory, reportsDirectory: reportsDirectory)
         let content = try stringParam(input, "content")
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try content.write(to: url, atomically: true, encoding: .utf8)
@@ -111,6 +133,11 @@ struct WriteTool: AgentTool {
 }
 
 struct EditTool: AgentTool {
+    let reportsDirectory: URL
+
+    init(reportsDirectory: URL = ResearchReports.directory) {
+        self.reportsDirectory = reportsDirectory
+    }
     let name = "edit"
     let description = "Replace a specific text string in a file. The old_text must uniquely match exactly one location."
     let inputSchema: [String: Any] = [
@@ -124,7 +151,7 @@ struct EditTool: AgentTool {
     ]
 
     func run(input: [String: Any], workingDirectory: URL) async throws -> String {
-        let url = try resolve(stringParam(input, "file_path"), in: workingDirectory)
+        let url = try resolve(stringParam(input, "file_path"), in: workingDirectory, reportsDirectory: reportsDirectory)
         let oldText = try stringParam(input, "old_text")
         let newText = input["new_text"] as? String ?? ""
         guard FileManager.default.fileExists(atPath: url.path) else { throw ToolError.notFound(url.path) }
@@ -143,7 +170,7 @@ final class ToolRegistry {
         BashTool(), ReadTool(), WriteTool(), EditTool(),
         CreateReminderTool(), CreateRoutineTool(), ListSchedulesTool(), DeleteScheduleTool(),
         RememberTool(), ForgetTool(), RecallTool(), SoulSetTool(), SoulDeleteTool(),
-        KnowledgeSearchTool(),
+        KnowledgeSearchTool(), ResearchReportTool(),
         WebSearchTool(), WebFetchTool(), BrowserTool(), ScreenshotTool(),
         ImageGenerationTool(),
     ]

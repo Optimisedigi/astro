@@ -53,6 +53,8 @@ actor ClaudeService {
     Reminders fire macOS notifications; routines run a prompt and notify with the result. \
     Use them proactively and finish tasks completely.
 
+    \(ResearchReportTool.workflowInstructions)
+
     The user has a personal knowledge library of saved videos, talks, transcripts and \
     documents, searchable with `knowledge_search`. Search it first for any question about \
     a topic, person, idea or piece of content they might have saved, before answering \

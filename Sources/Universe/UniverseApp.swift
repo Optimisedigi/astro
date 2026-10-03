@@ -1,4 +1,5 @@
 import SwiftUI
+import OSLog
 
 @main
 struct UniverseApp: App {
@@ -58,6 +59,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard claimSingleInstance() else { return }
 
         migrateLegacyDataDirectory()
+        do {
+            try ResearchReports.ensureDirectory()
+        } catch {
+            Logger(subsystem: "com.universe.app", category: "Launch")
+                .error("Research folder setup failed; reports will retry on use: \(error.localizedDescription, privacy: .private)")
+        }
         LaunchAtLogin.applyDefaultIfNeeded()
         NSApp.setActivationPolicy(.accessory) // LSUIElement equivalent: no Dock icon
         StatusItemController.shared.install()

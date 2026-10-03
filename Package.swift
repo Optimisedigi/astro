@@ -16,6 +16,7 @@ let package = Package(
             name: "Universe",
             dependencies: ["ThinkingOrbsKit", "BorderBeamKit"],
             path: "Sources/Universe",
+            resources: [.copy("ResearchTemplates")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]

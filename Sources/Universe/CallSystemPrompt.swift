@@ -111,6 +111,9 @@ func buildCallSystemPrompt() -> String {
     `write` for new files.
     - Never call a tool in silence — say a filler first.
 
+    ## HTML research
+    \(ResearchReportTool.workflowInstructions)
+
     ## Screenshot
     - If the user asks what's on their screen or wants visual help, call `screenshot`.
     - Say a quick filler first: "one sec, grabbing your screen…" / "taking a look…"

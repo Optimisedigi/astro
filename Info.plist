@@ -28,6 +28,8 @@
 	<string>15.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Astro saves your HTML research reports in the astro folder inside Documents.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Astro uses your microphone for voice conversations and journal dictation.</string>
 	<key>NSAppleEventsUsageDescription</key>

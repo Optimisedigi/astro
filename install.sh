@@ -15,6 +15,15 @@ readonly DEST="/Applications/Astro.app"
 readonly LEGACY="/Applications/Universe.app"
 readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
+prepare_research_folder() {
+  local reports="$HOME/Documents/astro"
+  if [[ -L "$reports" ]]; then
+    printf '%s\n' "Research folder is a symbolic link: $reports. Replace it with a normal folder." >&2
+    return 1
+  fi
+  mkdir -p "$reports"
+}
+
 main() {
   cd "$(dirname "$0")"
 
@@ -41,6 +50,9 @@ main() {
     | awk -F' = ' '/ BUILT_PRODUCTS_DIR/{d=$2} / FULL_PRODUCT_NAME/{n=$2} END{print d"/"n}')
 
   [[ -d "$app" ]] || { echo "Build produced no app bundle at: $app"; exit 1; }
+
+  echo "==> Preparing Documents/astro for research reports"
+  prepare_research_folder
 
   # Quit a running copy first (under either name), or the replace below leaves a
   # half-updated bundle.

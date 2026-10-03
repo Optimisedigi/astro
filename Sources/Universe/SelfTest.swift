@@ -172,6 +172,9 @@ enum SelfTest {
         // 6. Models, permissions and speech settings
         await runSettingsChecks(check: check)
 
+        // Built-in HTML research workflow (real file I/O, browser handoff injected).
+        await runResearchReportChecks(check: check)
+
         // 7. Onboarding flag logic
         runOnboardingChecks(check: check)
 
@@ -1131,14 +1134,25 @@ enum SelfTest {
         check(ModelRegistry.selectableModels.allSatisfy { $0.provider.isImplemented },
               "models: only reachable providers are selectable")
         check(!ModelRegistry.selectableModels.isEmpty, "models: at least one selectable model")
-        check(ModelRegistry.models(for: .anthropic).contains { $0.id == "claude-sonnet-5" },
-              "models: new Sonnet 5 present")
-        check(ModelRegistry.models(for: .anthropic).contains { $0.id == "claude-opus-5-5" && $0.name == "Claude Opus 5.5" },
-              "models: Claude Opus 5.5 present")
+        let claude = ModelRegistry.models(for: .anthropic)
+        for (id, name) in [("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+                           ("claude-opus-5-5", "Claude Opus 5.5"),
+                           ("claude-fable-5-1", "Claude Fable 5.1")] {
+            check(claude.contains {
+                $0.id == id && $0.name == name && $0.contextWindow == 1_000_000
+                    && $0.maxOutputTokens == 128_000 && $0.supportsTools && $0.supportsVision
+            }, "models: \(name) has the published ID, limits, and chat capabilities")
+        }
+        check(claude.first?.id == "claude-sonnet-5-5", "models: Sonnet 5.5 is the default Claude choice")
+        check(claude.contains { $0.id == "claude-sonnet-5" }, "models: saved Sonnet 5 choices remain available")
         let gpt6 = ModelRegistry.models(for: .openai).map(\.id)
         check(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"].allSatisfy(gpt6.contains),
               "models: GPT-6 Astra, Sol and Luna present")
-        check(gpt6.first == "gpt-6-sol", "models: GPT-6 Sol is the OpenAI fallback")
+        check(ModelRegistry.models(for: .openai).contains {
+            $0.id == "gpt-6.1-sol" && $0.name == "GPT-6.1 Sol" && $0.contextWindow == 1_050_000
+                && $0.maxOutputTokens == 128_000 && $0.supportsTools && $0.supportsVision
+        }, "models: GPT-6.1 Sol has the published ID, limits, and chat capabilities")
+        check(gpt6.first == "gpt-6.1-sol", "models: GPT-6.1 Sol is the OpenAI fallback")
         check(ModelRegistry.models(for: .gemini).contains { $0.id == "gemini-3-pro-preview" },
               "models: new Gemini 3 Pro present")
         check(ModelRegistry.models(for: .kimi).contains { $0.id == "k3" },
@@ -1157,6 +1171,12 @@ enum SelfTest {
         check(ModelRegistry.selectableModels.contains { $0.id == original }, "models: default selection is reachable")
         registry.selectedModelID = "claude-haiku-4-5-20251001"
         check(registry.selectedModel.name == "Claude Haiku 4.5", "models: selection resolves to the right model")
+        for id in ["gpt-6.1-sol", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"] {
+            registry.selectedModelID = id
+            let expectedProvider: AIProvider = id.hasPrefix("claude-") ? .anthropic : .openai
+            check(registry.selectedModel.id == id && registry.selectedModel.provider == expectedProvider,
+                  "models: \(id) resolves to its existing OAuth provider")
+        }
         registry.selectedModelID = original
 
         // Permissions: every row must map to a real Settings pane and describe itself.
@@ -1845,6 +1865,8 @@ enum SelfTest {
         ]
         let body = ClaudeService.openAIBody(messages: history, tools: ToolRegistry.shared.schemas,
                                             model: gpt, system: prompt)
+        check(body["model"] as? String == "gpt-6.1-sol",
+              "openai: the latest Sol ID reaches the OAuth Responses request")
         let sentTools = (body["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
         check(sentTools.contains("knowledge_search"), "knowledge: OpenAI chat requests carry the library tool")
         let input = body["input"] as? [[String: Any]] ?? []

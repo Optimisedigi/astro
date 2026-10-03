@@ -122,6 +122,7 @@ Microphone and speech-recognition permissions are needed for the corresponding v
 
 ### More desktop tools
 
+- **HTML research:** ask Astro to research a topic or compare options, save the results as HTML, and open them. This is built in, not a skill. Reports use the supplied review-sheet design and live in `~/Documents/astro`, created during source installation and on the app's first launch. Existing reports are preserved; macOS may ask for Documents access once.
 - **Tasks:** named checklists, completion tracking and quick access from a tab.
 - **Skills:** local instruction files for specialised tasks, including installation from GitHub.
 - **Clipboard history:** revisit copied text, images and file references.
