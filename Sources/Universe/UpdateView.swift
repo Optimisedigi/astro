@@ -24,7 +24,7 @@ struct UpdateView: View {
         }
         .frame(width: 340)
         .task {
-            await updater.checkForUpdate()
+            if case .idle = updater.state { await updater.checkForUpdate() }
         }
     }
 
@@ -72,28 +72,6 @@ struct UpdateView: View {
             }
             .frame(maxWidth: .infinity)
 
-        case let .downloading(progress):
-            VStack(spacing: 10) {
-                ProgressView(value: progress)
-                    .tint(.white.opacity(0.7))
-                    .frame(maxWidth: 200)
-                Text("Downloading… \(Int(progress * 100))%")
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.6))
-            }
-            .frame(maxWidth: .infinity)
-
-        case .installing:
-            VStack(spacing: 10) {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(.white.opacity(0.7))
-                Text("Installing update…")
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.6))
-            }
-            .frame(maxWidth: .infinity)
-
         case let .failed(message):
             VStack(spacing: 10) {
                 HStack(spacing: 6) {
@@ -127,8 +105,8 @@ struct UpdateView: View {
             Spacer()
 
             if case .available = updater.state {
-                GlassButton("Update Now", isPrimary: true) {
-                    Task { await updater.performUpdate() }
+                GlassButton("Download on GitHub", isPrimary: true) {
+                    updater.openDownload()
                 }
             }
 

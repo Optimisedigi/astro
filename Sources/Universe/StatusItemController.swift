@@ -97,6 +97,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         add("Permissions…", #selector(openPermissions))
         menu.addItem(.separator())
         add("Advanced (API key)…", #selector(openAdvanced))
+        add("Check for Updates…", #selector(openUpdates))
+        menu.items.last?.identifier = Self.updateItemID
         menu.addItem(.separator())
         add("Open at Login", #selector(toggleLaunchAtLogin))
         menu.items.last?.identifier = Self.launchAtLoginItemID
@@ -110,8 +112,16 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.item(at: 0)?.isHidden = !isActive
         updateLaunchAtLoginItem(in: menu)
+        if let item = menu.items.first(where: { $0.identifier == Self.updateItemID }) {
+            if case let .available(_, version) = AppUpdater.shared.state {
+                item.title = "Update Available (\(version))…"
+            } else {
+                item.title = "Check for Updates…"
+            }
+        }
     }
 
+    private static let updateItemID = NSUserInterfaceItemIdentifier("softwareUpdate")
     private static let launchAtLoginItemID = NSUserInterfaceItemIdentifier("launchAtLogin")
 
     /// Read fresh on every open: the user can also change it in System Settings.
@@ -145,6 +155,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     @objc private func openMemory() { PanelController.shared.openSheet(.memory) }
     @objc private func openPermissions() { PanelController.shared.openSheet(.permissions) }
     @objc private func openAdvanced() { SettingsWindowController.shared.show() }
+    @objc private func openUpdates() {
+        UpdateWindowController.show()
+        Task { await AppUpdater.shared.checkForUpdate() }
+    }
     @objc private func quit() { NSApplication.shared.terminate(nil) }
 
     // MARK: - Icon

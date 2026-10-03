@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotchCallButton.hide()
         VirtualNotch.hide()
         ClipboardMonitor.shared.stop()
+        AppUpdater.shared.stopAutomaticChecks()
         // Release the microphone on the way out, or macOS leaves the recording
         // indicator lit until the process is fully reaped.
         VoiceService.shared.stopListening()
@@ -80,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeyManager.shared.register()
         ScheduleStore.shared.start()
         ClipboardMonitor.shared.start()
+        AppUpdater.shared.startAutomaticChecks()
         // Switch echo cancellation on now, in the background, so the first
         // ⌥Space or diary dictation opens the mic in ~0.1 s instead of ~1.2 s.
         // Does not open the microphone.

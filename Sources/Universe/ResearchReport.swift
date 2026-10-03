@@ -20,6 +20,25 @@ struct ResearchReport: Decodable {
         let duration: String?
         let thumb: String?
         let note: String?
+
+        var thumbnailURL: String? {
+            if let thumb { return thumb }
+            guard let components = URLComponents(string: url), let host = components.host?.lowercased() else { return nil }
+            let parts = components.path.split(separator: "/")
+            let id: String?
+            if ["youtu.be", "www.youtu.be"].contains(host), parts.count == 1 {
+                id = String(parts[0])
+            } else if ["youtube.com", "www.youtube.com", "m.youtube.com", "www.youtube-nocookie.com"].contains(host) {
+                if components.path == "/watch" {
+                    id = components.queryItems?.first { $0.name == "v" }?.value
+                } else if parts.count == 2, ["shorts", "embed", "live"].contains(String(parts[0])) {
+                    id = String(parts[1])
+                } else { id = nil }
+            } else { id = nil }
+            guard let id, id.count == 11,
+                  id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else { return nil }
+            return "https://i.ytimg.com/vi/\(id)/hqdefault.jpg"
+        }
     }
     struct Item: Decodable {
         let name: String
@@ -50,7 +69,7 @@ struct ResearchReport: Decodable {
     let date: String?
     let subtitle: String?
     let verdict: String
-    let facts: [Fact]
+    let facts: [Fact]?
     let items: [Item]
     let comparison: Comparison?
     let notes: [String]
@@ -59,9 +78,10 @@ struct ResearchReport: Decodable {
     func validate() throws {
         guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               title.count <= 300, !verdict.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              facts.count == 4, facts.allSatisfy({ !$0.label.isEmpty && !$0.value.isEmpty && $0.value.count <= 20 }),
+              (facts?.count ?? 0) <= 4,
+              (facts ?? []).allSatisfy({ !$0.label.isEmpty && !$0.value.isEmpty && $0.value.count <= 20 }),
               (1...20).contains(items.count), (1...50).contains(sources.count), notes.count <= 50 else {
-            throw ResearchReportError.invalid("Provide a title, verdict, four short key facts, 1–20 items, and 1–50 sources.")
+            throw ResearchReportError.invalid("Provide a title, verdict, up to four optional short key facts, 1–20 items, and 1–50 sources.")
         }
         for item in items {
             guard !item.name.isEmpty, (1...20).contains(item.specs.count),
@@ -135,9 +155,7 @@ enum ResearchReportRenderer {
             "DATE": escape(date), "SUBTITLE": paragraph(report.subtitle, className: "subtitle"),
             "VERDICT": escape(report.verdict), "POLICY": escape(policy),
             "CSS": try template("review-sheet", extension: "css"), "SCRIPT": themeScript,
-            "FACTS": report.facts.map { fact in
-                "<div class=\"fact\"><span class=\"fact-label\">\(escape(fact.label))</span><span class=\"fact-value\">\(escape(fact.value))</span><span class=\"fact-note\">\(escape(fact.note ?? ""))</span></div>"
-            }.joined(separator: "\n"),
+            "FACTS": renderFacts(report.facts ?? []),
             "ITEMS": wide ? cards : "<section class=\"items\">\(cards)</section>",
             "COMPARISON": report.comparison.map(renderComparison) ?? "",
             "NOTES": report.notes.map { "<li>\(escape($0))</li>" }.joined(),
@@ -189,6 +207,14 @@ enum ResearchReportRenderer {
         "<a href=\"\(escape(url))\" target=\"_blank\" rel=\"noopener noreferrer\">\(escape(title))</a>"
     }
 
+    private static func renderFacts(_ facts: [ResearchReport.Fact]) -> String {
+        guard !facts.isEmpty else { return "" }
+        let boxes = facts.map { fact in
+            "<div class=\"fact\"><span class=\"fact-label\">\(escape(fact.label))</span><span class=\"fact-value\">\(escape(fact.value))</span><span class=\"fact-note\">\(escape(fact.note ?? ""))</span></div>"
+        }.joined(separator: "\n")
+        return "<section class=\"facts\" aria-label=\"Key facts\">\(boxes)</section>"
+    }
+
     private static func renderItem(_ item: ResearchReport.Item, wide: Bool) -> String {
         let specs = "<dl class=\"specs\">" + item.specs.map {
             "<div class=\"spec\"><dt>\(escape($0.label))</dt><dd>\(escape($0.value))</dd></div>"
@@ -214,7 +240,7 @@ enum ResearchReportRenderer {
     }
 
     private static func renderVideo(_ video: ResearchReport.Video) -> String {
-        let image = video.thumb.map { "<img src=\"\(escape($0))\" alt=\"\" loading=\"lazy\">" } ?? ""
+        let image = video.thumbnailURL.map { "<img src=\"\(escape($0))\" alt=\"\" loading=\"lazy\">" } ?? ""
         let duration = video.duration.map { "<span class=\"duration\">\(escape($0))</span>" } ?? ""
         let meta = [video.channel, video.note].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         return """
@@ -234,14 +260,15 @@ enum ResearchReportRenderer {
             }.joined()
             return "<tr><th scope=\"row\">\(escape(row.feature))</th>\(cells)</tr>"
         }.joined()
-        let video = comparison.video.map { link($0.url, title: $0.title) + paragraph($0.note, className: "fine") } ?? ""
+        let video = comparison.video.map { "<div class=\"comparison-video\">\(renderVideo($0))</div>" } ?? ""
         return """
         <section class="compare">
-          <div class="compare-head"><h2>Head to head</h2>\(video)</div>
+          <div class="compare-head"><h2>Comparison</h2></div>
           <div class="table-scroll" tabindex="0" role="region" aria-label="Comparison table">
-            <table><thead><tr><th scope="col">Feature</th>\(headings)</tr></thead><tbody>\(rows)</tbody></table>
+            <table><thead><tr><th scope="col">Aspect</th>\(headings)</tr></thead><tbody>\(rows)</tbody></table>
           </div>
-          <p class="fine">Highlighted cells mark objectively stronger values.</p>
+          \(comparison.rows.contains { $0.winner != nil } ? "<p class=\"fine\">Highlighted cells mark objectively stronger values.</p>" : "")
+          \(video)
         </section>
         """
     }

@@ -174,6 +174,7 @@ enum SelfTest {
 
         // Built-in HTML research workflow (real file I/O, browser handoff injected).
         await runResearchReportChecks(check: check)
+        await runAppUpdaterChecks(check: check)
 
         // 7. Onboarding flag logic
         runOnboardingChecks(check: check)

@@ -50,6 +50,42 @@ extension SelfTest {
             check(videoHTML.contains("<div class=\"side\"><a class=\"video\"") && videoHTML.contains("Search link; no specific video verified."),
                   "research: optional single-subject video uses the supplied sidebar layout with its caveat")
 
+            for includeEmptyArray in [false, true] {
+                var optionalFacts = sample
+                optionalFacts.removeValue(forKey: "facts")
+                if includeEmptyArray { optionalFacts["facts"] = [] as [[String: String]] }
+                do {
+                    let page = try ResearchReportRenderer.render(decode(optionalFacts))
+                    check(!page.contains("<section class=\"facts\""), "research: omitted or empty key facts produce no summary boxes")
+                } catch {
+                    check(false, "research: omitted or empty key facts are accepted: \(error)")
+                }
+            }
+            for url in ["https://www.youtube.com/watch?v=Zy9XRMzYqB0", "https://youtu.be/Zy9XRMzYqB0",
+                        "https://www.youtube.com/shorts/Zy9XRMzYqB0", "https://www.youtube.com/embed/Zy9XRMzYqB0"] {
+                var thumbnailSample = sample
+                thumbnailSample["items"] = [["name": "Video", "specs": [["label": "Detail", "value": "Test data"]],
+                    "video": ["title": "Thumbnail check", "url": url]]]
+                let page = try ResearchReportRenderer.render(decode(thumbnailSample))
+                check(page.contains("<img src=\"https://i.ytimg.com/vi/Zy9XRMzYqB0/hqdefault.jpg\""),
+                      "research: YouTube video URLs get a thumbnail automatically (\(url))")
+            }
+
+            check(!videoHTML.contains("<img "), "research: search links never get a fabricated thumbnail")
+            for url in ["https://youtube.com.example.com/watch?v=Zy9XRMzYqB0", "https://youtu.be/invalid",
+                        "https://www.youtube.com/watch?v=Zy9XRMzYqB0%2Fextra"] {
+                let video = try JSONDecoder().decode(ResearchReport.Video.self,
+                    from: JSONSerialization.data(withJSONObject: ["title": "Invalid thumbnail ID", "url": url]))
+                check(video.thumbnailURL == nil, "research: lookalike hosts and invalid video IDs cannot steer thumbnail URLs")
+            }
+            for count in 1...3 {
+                var fewerFacts = sample
+                fewerFacts["facts"] = (1...count).map { ["label": "Fact \($0)", "value": "Test"] }
+                let page = try ResearchReportRenderer.render(decode(fewerFacts))
+                check(page.components(separatedBy: "<div class=\"fact\">").count == count + 1,
+                      "research: \(count) useful summary boxes work without padding to four")
+            }
+
             var comparisonSample = sample
             comparisonSample["items"] = [
                 ["name": "Option A", "specs": [["label": "Detail", "value": "First"]], "pros": ["A benefit"], "cons": ["A tradeoff"]],
@@ -63,6 +99,39 @@ extension SelfTest {
             check(multi.contains("class=\"items\"") && multi.contains("class=\"table-scroll\"")
                     && multi.contains("scope=\"row\"") && multi.components(separatedBy: "class=\"win\"").count == 2,
                   "research: comparisons retain cards, a scrollable accessible table, and only objective winner marks")
+
+            check((multi.range(of: "<section class=\"compare\"")?.lowerBound ?? multi.endIndex)
+                    < (multi.range(of: "<section class=\"items\"")?.lowerBound ?? multi.startIndex),
+                  "research: a comparison matrix comes before supporting cards")
+
+            var threeSubjects = comparisonSample
+            threeSubjects["comparison"] = ["columns": ["Category A", "Category B", "Category C"], "rows": [
+                ["feature": "Definition", "values": ["First", "Second", "Third"]],
+                ["feature": "Relationship", "values": ["Can overlap", "Can overlap", "Describes a role"]],
+            ]]
+            let matrix = try ResearchReportRenderer.render(decode(threeSubjects))
+            check(matrix.contains("<th scope=\"col\">Category C</th>") && matrix.contains("<th scope=\"row\">Relationship</th>")
+                    && !matrix.contains("Highlighted cells mark"),
+                  "research: three-subject category comparisons use an aspect matrix without ranking language")
+
+            for (url, hasThumbnail) in [("https://www.youtube.com/watch?v=Zy9XRMzYqB0", true),
+                                        ("https://www.youtube.com/results?search_query=research", false)] {
+                var withVideo = threeSubjects
+                var comparison = withVideo["comparison"] as? [String: Any] ?? [:]
+                comparison["video"] = ["title": "Comparison <video>", "url": url, "channel": "Test channel",
+                                       "duration": "2:00", "note": "Test caveat"]
+                withVideo["comparison"] = comparison
+                let page = try ResearchReportRenderer.render(decode(withVideo))
+                check(page.contains("<div class=\"comparison-video\"><a class=\"video\"")
+                        && page.contains("Comparison &lt;video&gt;") && page.contains("Test channel · Test caveat")
+                        && page.contains("class=\"duration\">2:00"),
+                      "research: comparison videos use the shared rich video renderer and preserve metadata")
+                check(page.contains("<img src=\"https://i.ytimg.com/vi/Zy9XRMzYqB0/hqdefault.jpg\"") == hasThumbnail,
+                      "research: comparison video thumbnails are automatic, but search links never invent them")
+                check((page.range(of: "<table>")?.lowerBound ?? page.endIndex)
+                        < (page.range(of: "<div class=\"comparison-video\"")?.lowerBound ?? page.startIndex),
+                      "research: the comparison matrix stays ahead of its supporting video")
+            }
 
             var openedURLs: [URL] = []
             let tool = ResearchReportTool(documentsDirectory: documents, openURL: { url in
@@ -154,7 +223,7 @@ extension SelfTest {
                 var input: [String: Any]
                 switch mutation {
                 case "bad-link": invalid["sources"] = [["title": "Not a web link", "url": "file:///etc/passwd"]]
-                case "bad-facts": invalid["facts"] = []
+                case "bad-facts": invalid["facts"] = (1...5).map { ["label": "Fact \($0)", "value": "Test"] }
                 case "bad-columns": invalid["comparison"] = ["columns": ["A", "B"], "rows": [["feature": "Mismatch", "values": ["A"]]]]
                 case "bad-winner": invalid["comparison"] = ["columns": ["A", "B"], "rows": [["feature": "Invalid", "values": ["A", "B"], "winner": 2]]]
                 case "bad-thumb": invalid["items"] = [["name": "Video", "specs": [["label": "Detail", "value": "Test"]], "video": ["title": "Video", "url": "https://example.com", "thumb": "https://example.com/image.png"]]]

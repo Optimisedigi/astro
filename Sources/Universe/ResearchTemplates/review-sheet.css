@@ -14,7 +14,7 @@ h1,h2,p{margin:0}
 .sheet{max-width:1160px;margin:0 auto;background:var(--bg);border-radius:6px;padding:56px;display:flex;flex-direction:column;gap:40px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .mono{font-family:"Geist Mono",monospace;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
 
-.head{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:40px;align-items:start}
+.head{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:40px;align-items:start}
 .head-main,.verdict{display:flex;flex-direction:column;gap:14px}
 .head h1{font-size:36px;line-height:1.12;font-weight:650;letter-spacing:-.02em;text-wrap:pretty}
 .subtitle{font-size:15px;line-height:1.55;color:var(--muted)}
@@ -23,7 +23,8 @@ h1,h2,p{margin:0}
 .verdict p{font-size:16px;line-height:1.6;text-wrap:pretty}
 .theme-toggle{font-family:"Geist Mono",monospace;font-size:12px;background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 12px;cursor:pointer;white-space:nowrap;flex:none}
 
-.facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.facts:has(>.fact:only-child){grid-template-columns:1fr}
 .fact{background:var(--soft);border-radius:10px;padding:16px 18px;display:flex;flex-direction:column;gap:4px}
 .fact-label,.fact-note{font-size:12px;color:var(--muted)}
 .fact-value{font-size:22px;font-weight:600;letter-spacing:-.01em}
@@ -71,6 +72,7 @@ h1,h2,p{margin:0}
 .compare-head{display:flex;justify-content:space-between;align-items:baseline;gap:24px;flex-wrap:wrap}
 .compare h2{font-size:22px;font-weight:620;letter-spacing:-.015em}
 .compare-head a{font-size:13px}
+.comparison-video{width:100%;max-width:360px}
 table{width:100%;border-collapse:collapse;font-size:14px;line-height:1.5;table-layout:fixed}
 th{text-align:left;font-size:12px;font-weight:400;color:var(--muted);padding:0 16px 8px}
 th:first-child,td:first-child{padding-left:0;width:180px}
